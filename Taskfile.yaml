@@ -82,14 +82,14 @@ tasks:
       - command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications" || true
 
   # ----- Windows: %LOCALAPPDATA%\Programs + 开始菜单快捷方式 -----
+  # go-task 按 sh 语义解释 cmds,双引号里的 $var 传不到 PowerShell(会被先展开),
+  # 所以 PS 逻辑放 scripts/*.ps1 用 -File 调用,不内联在命令行 -----
   install-windows:
     platforms: [windows]
     cmds:
-      - |
-        powershell -NoProfile -Command "$dir = Join-Path $env:LOCALAPPDATA 'Programs\{{.APP}}'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Copy-Item (Join-Path 'build\windows-amd64' '{{.APP}}.exe') $dir -Force; $ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut([IO.Path]::Combine($env:APPDATA, 'Microsoft\Windows\Start Menu\Programs\{{.APP}}.lnk')); $lnk.TargetPath = Join-Path $dir '{{.APP}}.exe'; $lnk.Save(); Write-Host \"installed {{.APP}} -> $dir\""
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\install-windows.ps1" -App {{.APP}}
 
   uninstall-windows:
     platforms: [windows]
     cmds:
-      - |
-        powershell -NoProfile -Command "$dir = Join-Path $env:LOCALAPPDATA 'Programs\{{.APP}}'; Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\{{.APP}}.lnk') -Force -ErrorAction SilentlyContinue"
+      - powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\uninstall-windows.ps1" -App {{.APP}}
