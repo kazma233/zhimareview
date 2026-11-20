@@ -736,8 +736,10 @@ func (ws *workspace) historyView(c *ui.Context) {
 			ui.Column(c).Fill().Children(func() {
 				// 仓库选择行：仓库下拉（选中项一行：仓库名 · 分支/upstream）
 				// + 远程操作按钮。全局 fetch 或本仓库远程操作在途时禁用按钮，
-				// 避免同一仓库的并发 git 写操作
-				ui.Row(c).FillWidth().Height(30).PaddingX(8).Gap(8).AlignItems(ui.Center).Children(func() {
+				// 避免同一仓库的并发 git 写操作。
+				// 顶 6 呼吸空隙（工作区分段行同款，贴着顶栏太挤），左 10 /
+				// 右 12 同 diff 列表行；内容区保持 30，控件观感不变只挪位置
+				ui.Row(c).FillWidth().Height(36).Padding(6, 12, 0, 10).Gap(10).AlignItems(ui.Center).Children(func() {
 					// 仓库切换下拉放在历史页：activeRepo 决定历史读哪个仓库，
 					// 工作区的改动树是跨仓库聚合，切仓库在那里没有效果
 					ws.repoComboView(c, tk)
@@ -787,8 +789,8 @@ func (ws *workspace) historyView(c *ui.Context) {
 					})
 				})
 				// 工具行：搜索 + 隐藏 merge。搜索框 Grow 吃掉剩余宽度，
-				// 过滤开关钉在行尾
-				ui.Row(c).FillWidth().Height(32).PaddingX(8).Gap(8).AlignItems(ui.Center).Children(func() {
+				// 过滤开关钉在行尾；上下各 6 呼吸空隙，与仓库行、表头不贴死
+				ui.Row(c).FillWidth().Height(44).Padding(6, 12, 6, 10).Gap(10).AlignItems(ui.Center).Children(func() {
 					if ui.SearchField(c.Key("commit-search"), &ws.hist.query).
 						Grow(1).
 						Placeholder("搜索标题 / 作者 / hash").
