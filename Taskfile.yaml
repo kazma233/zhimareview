@@ -1,0 +1,95 @@
+version: '3'
+
+vars:
+  APP: zhimareview
+  ID: com.kazma233.zhimareview
+  # 代码签名证书名(security find-identity -v -p codesigning 可列出);
+  # 本地网络/TCC 授权按签名身份追踪,ad-hoc 签名每次重编身份都变、授权即失效。
+  # mygo build 默认退回 ad-hoc 签名;这里填了自己钥匙串里的身份名时,
+  # install-darwin 会在拷贝后对该身份重签。换机器请改成自己的身份名或留空。
+  SIGN_IDENTITY: ""
+
+tasks:
+  default:
+    desc: 列出所有任务
+    cmds:
+      - task --list
+
+  build:
+    desc: 构建 release 应用(mygo.json 驱动:macOS 出 .app+dmg,Linux/Windows 出对应安装物)
+    # 不设 sources:清单容易漏(改了文件却不重编比慢更糟),go 编译与
+    # mygo 打包自带缓存,全量跑的代价可接受
+    cmds:
+      - go tool mygo build
+
+  install:
+    desc: 安装到当前用户(构建 + 平台桌面集成)
+    cmds:
+      - task: build
+      - task: install-{{OS}}
+
+  uninstall:
+    desc: 卸载当前用户安装
+    cmds:
+      - task: uninstall-{{OS}}
+
+  # ----- macOS: mygo build 产出的 .app 拷到 ~/Applications,Launchpad 自动识别。
+  # .app 已由 mygo build 组装(Info.plist/图标/签名),无需手工拼装 -----
+  install-darwin:
+    platforms: [darwin]
+    cmds:
+      - |
+        set -e
+        app="$HOME/Applications/{{.APP}}.app"
+        rm -rf "$app"
+        cp -R build/darwin-arm64/{{.APP}}.app "$app"
+        if [ -n "{{.SIGN_IDENTITY}}" ]; then
+          codesign --force --sign "{{.SIGN_IDENTITY}}" "$app"
+        fi
+        echo "installed {{.APP}} -> $app"
+
+  uninstall-darwin:
+    platforms: [darwin]
+    cmds:
+      - rm -rf "$HOME/Applications/{{.APP}}.app"
+
+  # ----- Linux: XDG 用户目录,发行版无关,无需 root -----
+  install-linux:
+    platforms: [linux]
+    cmds:
+      - install -Dm755 build/linux-amd64/{{.APP}} "$HOME/.local/bin/{{.APP}}"
+      - install -Dm644 resources/icon.png "$HOME/.local/share/icons/hicolor/512x512/apps/{{.ID}}.png"
+      - mkdir -p "$HOME/.local/share/applications"
+      - |
+        cat > "$HOME/.local/share/applications/{{.ID}}.desktop" <<EOF
+        [Desktop Entry]
+        Type=Application
+        Name=zhimareview
+        Exec={{.APP}}
+        Icon={{.ID}}
+        Categories=Development;
+        EOF
+      - command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications" || true
+      - command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" || true
+      - echo "installed {{.APP}} -> $HOME/.local"
+
+  uninstall-linux:
+    platforms: [linux]
+    cmds:
+      - rm -f "$HOME/.local/bin/{{.APP}}"
+      - rm -f "$HOME/.local/share/icons/hicolor/512x512/apps/{{.ID}}.png"
+      - rm -f "$HOME/.local/share/applications/{{.ID}}.desktop"
+      - command -v update-desktop-database >/dev/null && update-desktop-database "$HOME/.local/share/applications" || true
+
+  # ----- Windows: %LOCALAPPDATA%\Programs + 开始菜单快捷方式 -----
+  install-windows:
+    platforms: [windows]
+    cmds:
+      - |
+        powershell -NoProfile -Command "$dir = Join-Path $env:LOCALAPPDATA 'Programs\{{.APP}}'; New-Item -ItemType Directory -Force -Path $dir | Out-Null; Copy-Item (Join-Path 'build\windows-amd64' '{{.APP}}.exe') $dir -Force; $ws = New-Object -ComObject WScript.Shell; $lnk = $ws.CreateShortcut([IO.Path]::Combine($env:APPDATA, 'Microsoft\Windows\Start Menu\Programs\{{.APP}}.lnk')); $lnk.TargetPath = Join-Path $dir '{{.APP}}.exe'; $lnk.Save(); Write-Host \"installed {{.APP}} -> $dir\""
+
+  uninstall-windows:
+    platforms: [windows]
+    cmds:
+      - |
+        powershell -NoProfile -Command "$dir = Join-Path $env:LOCALAPPDATA 'Programs\{{.APP}}'; Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\{{.APP}}.lnk') -Force -ErrorAction SilentlyContinue"

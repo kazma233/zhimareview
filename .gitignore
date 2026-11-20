@@ -1,0 +1,52 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.lock
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+.glide/
+
+# MAC
+.DS_Store
+
+# debug
+**debug
+
+# idea
+.idea
+
+conf.json
+*.ini
+
+# go.sum
+
+.vscode
+
+skills-lock.json
+
+# agent
+.crush
+.agents
+.claude
+.zcode
+.zcodeignore
+.opencode
+opencode.json
+.workbuddy
+.trae
+
+# go-task
+.task
+
+# mygo
+/build/
+/.mygo/
+mygo_windows_*.syso
