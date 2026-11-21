@@ -277,6 +277,11 @@
    `HintsOnly: true`：Windows/macOS 单树句柄监听，无 per-entry 快照；代价是
    事件粗化为目录级 hint（"." 表示全量）。本应用刷新是「提示后重读」模型，
    粗粒度无损；命中判断用 `hitHint` 前缀匹配 + "." 特判。
+   **修订（2026-11-21）**：「无损」的前提是重读后内容相同不动已打开的会话。
+   同目录任意文件保存都会以目录 hint 命中正在看的文件/diff，若走完整重开
+   （换 fileView / 清 sides 走 loading），内容没变也会闪加载、滚回顶部、
+   Markdown 预览被踢回源码——重载必须走内容比对（`applyFile` 的 same 守卫、
+   `applyDiffState` 的 `sidesContentEqual`），相同直接丢弃。
 6. **Ignore 必须按路径任意段匹配**：嵌套仓库的 `.git`（zhimareview/.git）
    不在首段，漏排会让 git status 写 index 触发新 hint，形成
    「采集 → 写 index → hint → 再采集」的无限回环（界面持续闪烁 + git 进程风暴）。

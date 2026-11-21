@@ -20,6 +20,16 @@ type diffSides struct {
 	binData  []byte
 }
 
+// sidesContentEqual 判断两侧内容是否一致（含二进制的工作区字节）；任一
+// 侧未加载视为不等——equality 只对「已应用 vs 重读」这一组有意义。
+func sidesContentEqual(a, b *diffSides) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.binary == b.binary && a.oldValue == b.oldValue &&
+		a.newValue == b.newValue && bytes.Equal(a.binData, b.binData)
+}
+
 // loadSides 读取一个改动的两侧文本：
 // unstaged 用 index 对工作区，staged 用 HEAD 对 index，untracked 直接看工作区。
 // 二进制时读取工作区当前版本字节，供图片预览。
@@ -177,6 +187,11 @@ func (ws *workspace) openDiffAs(v git.Change, expanded bool, line int) {
 func (ws *workspace) applyDiffState(seq int, v git.Change, sides *diffSides) {
 	// 只接受仍是当前打开会话的结果（最新打开者胜；翻转不改世代）
 	if ws.diffv.open == nil || ws.diffv.seq != seq {
+		return
+	}
+	// 两侧内容没变（watch 重读）：不动已建缓冲与解码结果——滚动、展开态
+	// 与图片都属于已打开的会话，重复重建会让界面持续闪烁
+	if sidesContentEqual(ws.diffv.sides, sides) {
 		return
 	}
 	ws.diffv.sides = sides
@@ -345,12 +360,19 @@ func (ws *workspace) closeDiff() {
 	ws.diffv.jumpLine = 0
 }
 
-// reloadDiff 重新加载当前打开的 diff（写盘或暂存操作后）；保留当前展开态，
-// 不重复定位（定位只属于打开请求）。
+// reloadDiff 重新加载当前打开的 diff（watch 命中或暂存切换后）；不走
+// openDiffAs 整体重开——重开会清空 sides 走 loading（闪断）并重建缓冲
+// （滚动、展开态丢失），而这些属于已打开的会话；两侧内容是否真的变化由
+// applyDiffState 判定，相同直接丢弃。定位只属于打开请求，重载不重复定位。
 func (ws *workspace) reloadDiff() {
-	if ws.diffv.open != nil {
-		ws.openDiffAs(*ws.diffv.open, ws.diffv.expand, 0)
+	if ws.diffv.open == nil {
+		return
 	}
+	v := *ws.diffv.open
+	ws.diffv.seq++
+	seq := ws.diffv.seq
+	loadAsync(ws, func() *diffSides { return loadSides(v) },
+		func(sides *diffSides) { ws.applyDiffState(seq, v, sides) })
 }
 
 // runWrite 统一写操作的执行与收尾：经管线后台执行、主线程收尾；失败写

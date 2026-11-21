@@ -72,6 +72,105 @@ func TestHandleFsEventsReloadFile(t *testing.T) {
 	}
 }
 
+// watch 重读内容没变：编辑器状态（滚动所在）、Markdown 预览模式与已应用
+// 内容都不动，也不经过 loading（实抓：重载走了完整重开，同目录别的文件
+// 一保存，看着的文件就闪加载、滚回顶部、预览被踢回源码）。
+func TestHandleFsEventsReloadFileKeepsState(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	write(t, root+"/sub/a.md", "# 标题\n")
+	write(t, root+"/sub/b.md", "# 另一个\n")
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.openFile(root + "/sub/a.md")
+	ws.mdPreview = true
+	ed := ws.dirs.file.ed
+
+	// 同目录另一个文件原样保存：目录级 hint 命中已打开文件
+	write(t, root+"/sub/b.md", "# 另一个\n")
+	ws.handleFsEvents(root, []string{"sub"})
+
+	if ws.dirs.file == nil || ws.dirs.file.ed != ed {
+		t.Fatal("editor state rebuilt on unchanged reload")
+	}
+	if ws.dirs.file.loading {
+		t.Fatal("unchanged reload went through loading state")
+	}
+	if ws.dirs.file.content != "# 标题\n" {
+		t.Fatalf("content = %q, want unchanged", ws.dirs.file.content)
+	}
+	if !ws.mdPreview {
+		t.Fatal("markdown preview reset by unchanged reload")
+	}
+}
+
+// watch 重读 diff 两侧没变：sides 与缓冲（滚动、展开态所在）不动，也不
+// 经过 loading。
+func TestHandleFsEventsReloadDiffKeepsState(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/changed.txt", "v1\n")
+	gitCmd(t, root, "add", ".")
+	gitCmd(t, root, "commit", "-m", "base")
+	write(t, root+"/changed.txt", "v1\nv2\n")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	if len(ws.changes) != 1 {
+		t.Fatalf("changes = %d, want 1", len(ws.changes))
+	}
+	ws.openDiff(ws.changes[0])
+	if ws.diffv.sides == nil {
+		t.Fatal("diff not loaded")
+	}
+	sides, buf := ws.diffv.sides, ws.diffv.ed.New
+
+	// 原样重存（编辑器保存未改内容）：hint 命中 → 重读 → 内容相同丢弃
+	write(t, root+"/changed.txt", "v1\nv2\n")
+	ws.handleFsEvents(root, []string{"."})
+
+	if ws.diffv.sides != sides {
+		t.Fatal("sides replaced on unchanged reload")
+	}
+	if ws.diffv.ed.New != buf {
+		t.Fatal("diff buffers rebuilt on unchanged reload")
+	}
+	if ws.diffv.loading {
+		t.Fatal("unchanged reload went through loading state")
+	}
+}
+
+// watch 重读 diff 两侧变化：缓冲重建、模型更新为新内容。
+func TestHandleFsEventsReloadDiffAppliesChange(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/changed.txt", "v1\n")
+	gitCmd(t, root, "add", ".")
+	gitCmd(t, root, "commit", "-m", "base")
+	write(t, root+"/changed.txt", "v1\nv2\n")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	ws.openDiff(ws.changes[0])
+	buf := ws.diffv.ed.New
+
+	write(t, root+"/changed.txt", "v1\nv2\nv3\n")
+	ws.handleFsEvents(root, []string{"."})
+
+	if ws.diffv.ed.New == buf {
+		t.Fatal("diff buffers not rebuilt on changed content")
+	}
+	if ws.diffv.sides.newValue != "v1\nv2\nv3\n" {
+		t.Fatalf("newValue = %q, want updated", ws.diffv.sides.newValue)
+	}
+}
+
 // 目录模式：目录级 hint 命中已加载目录 → 重读缓存并重建行（新增文件入行）。
 func TestHandleFsEventsReloadDirs(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())

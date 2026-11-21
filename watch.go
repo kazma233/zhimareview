@@ -212,12 +212,13 @@ func (ws *workspace) handleFsEvents(root string, paths []string) {
 		}
 		return false
 	}
-	// 打开中的 diff 或文件内容变化 → 重载（提示是目录级，重读是幂等且便宜的）
+	// 打开中的 diff 或文件内容变化 → 重读（提示是目录级，是否真的变化由
+	// 重读结果判定，内容相同不动已打开的会话）
 	if ws.diffv.open != nil && hits(ws.diffv.target()) {
 		ws.reloadDiff()
 	}
 	if ws.dirs.file != nil && hits(ws.dirs.file.abs) {
-		ws.openFile(ws.dirs.file.abs)
+		ws.reloadOpenFile()
 	}
 	// 目录模式：受影响的已加载目录重读
 	if ws.sidebarTab == "dir" {

@@ -170,6 +170,21 @@ func (ws *workspace) openFile(abs string) {
 	ws.openFileAt(abs, 0)
 }
 
+// reloadOpenFile 是 watch 命中后的当前文件重读：不走 openFileAt 重新打开
+// ——重新打开会换全新的 fileView（loading 闪断、滚回顶部、Markdown 预览
+// 被踢回源码），而这些状态属于已打开的会话；内容是否真的变化由 applyFile
+// 判定，相同直接丢弃。路由（「查看 diff」）只属于打开请求，重读不重路由。
+func (ws *workspace) reloadOpenFile() {
+	if ws.dirs.file == nil {
+		return
+	}
+	abs := ws.dirs.file.abs
+	loadAsync(ws, func() fileResult {
+		content, err := os.ReadFile(abs)
+		return fileResult{content: content, err: err}
+	}, func(r fileResult) { ws.applyFile(abs, r.content, r.err) })
+}
+
 // openFileAt 是 openFile 的带跳转版本：打开后跳到 line 行（1 起，0 = 从头
 // 显示），搜索结果的内容命中靠它定位。
 func (ws *workspace) openFileAt(abs string, line int) {
@@ -225,9 +240,9 @@ func (ws *workspace) applyFile(abs string, content []byte, err error) {
 		head = head[:8192]
 	}
 	binary := isBinary(string(head))
-	same := !ws.dirs.file.loading && ws.dirs.file.kind == "text" && !binary && ws.dirs.file.content == string(content)
+	same := err == nil && !ws.dirs.file.loading && ws.dirs.file.kind != "" && ws.dirs.file.content == string(content)
 	if same {
-		// 内容没变（watch 重载/重复点同一文件）：仍按新请求跳到目标行
+		// 内容没变（watch 重载）：仍按新请求跳到目标行
 		ws.jumpToFileLine()
 		return
 	}
@@ -236,6 +251,8 @@ func (ws *workspace) applyFile(abs string, content []byte, err error) {
 		ws.setErr("读取文件失败", err.Error())
 		return
 	}
+	// 原始字节全存（文本供 Markdown 预览，二进制供重读比对跳过重解码）
+	ws.dirs.file.content = string(content)
 	if binary {
 		// 二进制：图片扩展名走预览，其余明确提示不支持
 		if isImagePath(abs) {
@@ -249,7 +266,6 @@ func (ws *workspace) applyFile(abs string, content []byte, err error) {
 		return
 	}
 	ws.dirs.file.kind = "text"
-	ws.dirs.file.content = string(content)
 	// 官方编辑器只读查看：按文件名选语言做语法高亮，未知扩展名为纯文本
 	st := &editor.State{
 		Buffer:      editor.NewBuffer(string(content)),

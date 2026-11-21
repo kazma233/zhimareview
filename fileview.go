@@ -12,6 +12,8 @@ type fileView struct {
 	abs     string
 	loading bool
 	kind    string // text / image / unsupported
+	// content 是最近一次应用的原始字节：watch 重读据此比对，相同则不动
+	// 已建状态（文本的编辑器/预览、图片的解码结果）
 	content string
 	// line 是打开请求要跳到的行（1 起，0 = 不跳）：搜索内容命中的点击带
 	// 行号；跳到即清零，之后的 watch 重载不再重复跳
