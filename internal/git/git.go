@@ -1,6 +1,7 @@
 // Package git 封装系统 git CLI：仓库发现、状态采集、对象读取与暂存/提交。
 // 行为契约：porcelain v1、
-// staged/unstaged/untracked 三区、应用内路径统一 `/` 分隔。
+// staged/unstaged/untracked 三区、应用内路径统一 `/` 分隔；改名/复制条目
+// Path 一律取新路径（文件现所在），旧路径携带在 OrigPath。
 package git
 
 import (

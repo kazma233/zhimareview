@@ -4,8 +4,11 @@ import "strings"
 
 // StatusFile 是 porcelain v1 的一行：X 是 staged 位，Y 是 unstaged 位。
 type StatusFile struct {
-	X, Y      byte
+	X, Y byte
+	// Path 一律是文件现所在的新路径；改名/复制行（R/C，形如 "old -> new"）
+	// 的旧路径单独记在 OrigPath。打开、分组、暂存等落盘操作都按新路径走。
 	Path      string
+	OrigPath  string
 	Untracked bool
 }
 
@@ -19,10 +22,12 @@ type RepoStatus struct {
 
 // Change 是压平到侧栏的一个改动文件。
 // Section 取值 unstaged / staged / untracked；Code 是对应的 porcelain 状态位。
+// OrigPath 是改名/复制条目的旧路径（diff 旧侧、展示用），非改名为空。
 type Change struct {
 	RepoPath string
 	RepoRel  string
 	Path     string
+	OrigPath string
 	Section  string
 	Code     string
 }
@@ -57,6 +62,15 @@ func ReadStatus(repoPath string) (*RepoStatus, error) {
 		}
 		x, y := line[0], line[1]
 		f := StatusFile{X: x, Y: y, Path: line[3:], Untracked: x == '?' && y == '?'}
+		// 改名/复制一行描述两个路径：Path 取新路径（文件现所在），旧路径
+		// 单独携带。porcelain v1 无字段分隔符，文件名真含 " -> " 时本格式
+		// 有固有歧义，按首个分隔拆分（该场景极罕见，v2 的 TAB 分隔才能根治）
+		if x == 'R' || x == 'C' || y == 'R' || y == 'C' {
+			if i := strings.Index(f.Path, " -> "); i >= 0 {
+				f.OrigPath = f.Path[:i]
+				f.Path = f.Path[i+4:]
+			}
+		}
 		switch {
 		case f.Untracked:
 			st.Untracked = append(st.Untracked, f)
@@ -94,13 +108,13 @@ func CollectChanges(repos []Repo) []Change {
 			continue
 		}
 		for _, f := range e.status.Unstaged {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, "unstaged", string(f.Y)})
+			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "unstaged", string(f.Y)})
 		}
 		for _, f := range e.status.Staged {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, "staged", string(f.X)})
+			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "staged", string(f.X)})
 		}
 		for _, f := range e.status.Untracked {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, "untracked", "?"})
+			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "untracked", "?"})
 		}
 	}
 	return result

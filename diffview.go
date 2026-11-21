@@ -66,8 +66,13 @@ func loadSides(v git.Change) *diffSides {
 			fillBinary()
 			return s
 		}
-		// 新文件暂存后 HEAD 没有该对象，旧侧为空
-		s.oldValue, _, _ = git.ShowObject(v.RepoPath, "HEAD", v.Path)
+		// 新文件暂存后 HEAD 没有该对象，旧侧为空；改名/复制的旧内容在
+		// 旧路径（HEAD:OrigPath），新侧按现路径取
+		oldPath := v.Path
+		if v.OrigPath != "" {
+			oldPath = v.OrigPath
+		}
+		s.oldValue, _, _ = git.ShowObject(v.RepoPath, "HEAD", oldPath)
 		s.newValue, _, _ = git.ShowObject(v.RepoPath, ":0", v.Path)
 		return s
 	default:

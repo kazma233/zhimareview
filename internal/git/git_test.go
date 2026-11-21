@@ -148,6 +148,42 @@ func TestReadStatus(t *testing.T) {
 	}
 }
 
+// 改名条目（git mv）：porcelain v1 一行两个路径（"old -> new"），解析后
+// Path 取新路径（文件现所在），旧路径携带在 OrigPath——实抓：不拆分时
+// Path 是含箭头的原始串，侧栏按旧目录分组、按新路径打开全部失败。
+func TestReadStatusRename(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	initRepo(t, root)
+	write(t, root+"/aidocs/note.md", "moved\n")
+	gitIn(t, root, "add", ".")
+	gitIn(t, root, "commit", "-m", "base")
+	if err := os.MkdirAll(root+"/docs", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, root, "mv", "aidocs/note.md", "docs/note.md")
+
+	st, err := ReadStatus(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Staged) != 1 {
+		t.Fatalf("staged = %+v, want 1 rename entry", st.Staged)
+	}
+	f := st.Staged[0]
+	if f.X != 'R' || f.Path != "docs/note.md" || f.OrigPath != "aidocs/note.md" {
+		t.Errorf("rename entry = %+v, want R docs/note.md (from aidocs/note.md)", f)
+	}
+
+	changes := CollectChanges(FindRepos(root))
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want 1", changes)
+	}
+	c := changes[0]
+	if c.Section != "staged" || c.Code != "R" || c.Path != "docs/note.md" || c.OrigPath != "aidocs/note.md" {
+		t.Errorf("change = %+v, want staged R docs/note.md from aidocs/note.md", c)
+	}
+}
+
 func TestCollectChanges(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	initRepo(t, root+"/alpha")
@@ -160,8 +196,8 @@ func TestCollectChanges(t *testing.T) {
 	changes := CollectChanges(repos)
 	// 顺序：unstaged → staged → untracked
 	want := []Change{
-		{root + "/alpha", "alpha", "base.txt", "unstaged", "M"},
-		{root + "/beta/deep", "beta/deep", "b.txt", "untracked", "?"},
+		{root + "/alpha", "alpha", "base.txt", "", "unstaged", "M"},
+		{root + "/beta/deep", "beta/deep", "b.txt", "", "untracked", "?"},
 	}
 	if len(changes) != len(want) {
 		t.Fatalf("changes = %+v, want %d entries", changes, len(want))

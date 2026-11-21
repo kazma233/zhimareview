@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -66,6 +67,40 @@ func TestBuildChangesTree(t *testing.T) {
 	// 目录节点的子节点数量
 	if len(demo.kids) != 2 {
 		t.Errorf("demo kids = %d, want 2", len(demo.kids))
+	}
+}
+
+// 改名条目按新路径分组：git mv aidocs docs 后文件挂在 docs 下（带 R 字母），
+// 旧目录 aidocs 不出现——实抓：Path 混入箭头串时树里只有旧目录、新文件丢失。
+func TestBuildChangesTreeRenameGroupsByNewPath(t *testing.T) {
+	repos := []git.Repo{{Path: "/r/reins", Name: "reins", Rel: ""}}
+	changes := []git.Change{
+		{RepoPath: "/r/reins", Path: "docs/AGENTS.md", OrigPath: "aidocs/AGENTS.md", Section: "staged", Code: "R"},
+		{RepoPath: "/r/reins", Path: "docs/Ref.md", OrigPath: "aidocs/Ref.md", Section: "staged", Code: "R"},
+	}
+	roots, index := buildChangesTree(repos, changes)
+
+	var labels []string
+	var walk func(items []*treeItem)
+	walk = func(items []*treeItem) {
+		for _, it := range items {
+			labels = append(labels, it.label)
+			walk(it.kids)
+		}
+	}
+	walk(roots)
+	for _, l := range labels {
+		if l == "aidocs" || strings.Contains(l, "->") {
+			t.Fatalf("old dir or arrow leaked into tree: %q (all: %v)", l, labels)
+		}
+	}
+	docs := index[dirID("docs")]
+	if docs == nil || docs.count != 2 {
+		t.Fatalf("docs item = %+v, want 2 renamed files", docs)
+	}
+	agent := index["cf:/r/reins|docs/AGENTS.md|staged"]
+	if agent == nil || agent.letter != "R" {
+		t.Errorf("docs/AGENTS.md item = %+v, want letter R", agent)
 	}
 }
 

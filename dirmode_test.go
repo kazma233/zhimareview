@@ -409,3 +409,28 @@ func TestBuildChangeByAbs(t *testing.T) {
 		t.Error("unchanged file should not be indexed")
 	}
 }
+
+// staged 改名的 diff 两侧：旧侧按 HEAD 旧路径取，新侧按现路径取——实抓：
+// 旧侧按现路径找 HEAD 对象必然不存在，改名 diff 打开只剩新侧（旧侧空白）。
+func TestLoadSidesStagedRename(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/aidocs/note.md", "moved\n")
+	gitCmd(t, root, "add", ".")
+	gitCmd(t, root, "commit", "-m", "base")
+	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, root, "mv", "aidocs/note.md", "docs/note.md")
+
+	repos := git.FindRepos(root)
+	changes := git.CollectChanges(repos)
+	if len(changes) != 1 || changes[0].Code != "R" {
+		t.Fatalf("changes = %+v, want 1 staged rename", changes)
+	}
+	sides := loadSides(changes[0])
+	if sides.binary || sides.oldValue != "moved\n" || sides.newValue != "moved\n" {
+		t.Fatalf("sides = old %q new %q binary %v, want both sides moved",
+			sides.oldValue, sides.newValue, sides.binary)
+	}
+}
