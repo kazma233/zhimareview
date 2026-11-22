@@ -446,3 +446,84 @@ func TestReloadKeepsSelectedCommit(t *testing.T) {
 		t.Fatalf("selection after the commit went away = %d, want -1", ws.hist.sel)
 	}
 }
+
+// 焦点刷新的历史页比对：历史没变整体不动（选中/详情/搜索态/分支状态原样，
+// 不重读详情），真有新提交才重置落地——实抓：例行重扫走了失效重载，选中
+// 与详情闪断、搜索全量态（allTried）被清导致回页重新全量 log。
+func TestFocusRefreshKeepsUnchangedHistory(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, root, "commit", "-am", "second")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.mainTab = 1
+	ws.activeRepo = root
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	if len(ws.hist.commits) != 2 {
+		t.Fatalf("commits = %d, want 2", len(ws.hist.commits))
+	}
+	// 选中一条并展示详情；埋下「历史未变也不得被清」的哨兵
+	ws.hist.sel = 0
+	ws.loadCommitDetail(ws.hist.commits[0])
+	waitFor(t, func() bool { return !ws.hist.detailLoading && ws.hist.detailText != "" }, 5*time.Second, "detail not loaded")
+	detail := ws.hist.detailText
+	ws.hist.allTried = true
+	ws.setBranchStatus(root, git.BranchStatus{Ahead: 3})
+
+	ws.refresh()
+
+	if ws.hist.sel != 0 || ws.hist.detailText != detail || ws.hist.detailLoading {
+		t.Fatalf("history state churned on unchanged refresh: sel=%d detail=%q loading=%v",
+			ws.hist.sel, ws.hist.detailText, ws.hist.detailLoading)
+	}
+	if !ws.hist.allTried {
+		t.Error("allTried cleared by unchanged refresh")
+	}
+	if ws.hist.statusByRepo[root].Ahead != 3 {
+		t.Errorf("branch status reset by unchanged refresh: %+v", ws.hist.statusByRepo)
+	}
+
+	// 真有新提交：重置落地，新提交出现在列表
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, root, "commit", "-am", "third")
+	ws.refresh()
+	if len(ws.hist.commits) != 3 || !hasSubject(ws.hist.commits, "third") {
+		t.Fatalf("commits after real change = %+v, want 3 with third", ws.hist.commits)
+	}
+}
+
+// 翻页进度保留：已加载的追加页（虚拟列表滚动加载进 all 的行）在历史未变
+// 的刷新后不丢——失效重载会把 all 打回首页。
+func TestReloadCommitsKeepsLoadedPages(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.mainTab = 1
+	ws.activeRepo = root
+	ws.loadCommits()
+	if len(ws.hist.all) != 1 {
+		t.Fatalf("all = %d rows, want 1", len(ws.hist.all))
+	}
+	// 模拟翻出的追加页（追加不改下标，done 未置）
+	ws.hist.all = append(ws.hist.all, git.CommitRow{Hash: "page2"})
+	ws.hist.done = false
+
+	ws.refresh()
+
+	if len(ws.hist.all) != 2 || ws.hist.all[1].Hash != "page2" {
+		t.Errorf("all = %+v, appended page lost by unchanged refresh", ws.hist.all)
+	}
+	if ws.hist.done {
+		t.Error("done flipped by unchanged refresh")
+	}
+}

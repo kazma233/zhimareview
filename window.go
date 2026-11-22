@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -557,13 +558,18 @@ func firstLine(s string) string {
 	return s
 }
 
-// applyScanState 应用扫描结果；root 已变或已回选择态时丢弃。
+// applyScanState 应用扫描结果；root 已变或已回选择态时丢弃。仓库与改动都
+// 和当前一致（例行重扫没扫出新东西）时只清过程状态，不动数据与派生——
+// 重读-比对-落地，改动树/目录行的整表重建对用户是纯闪烁。
 func (ws *workspace) applyScanState(dir string, found []git.Repo, changes []git.Change) {
 	if ws.root != dir || ws.mode != "work" {
 		return
 	}
-	ws.repos = found
-	ws.changes = changes
+	changed := !slices.Equal(ws.repos, found) || !slices.Equal(ws.changes, changes)
+	if changed {
+		ws.repos = found
+		ws.changes = changes
+	}
 	ws.scanning = false
 	ws.clearErr()
 	// 根目录变化时目录模式状态重置；改动树显式收起的目录按条目 id 记录
@@ -578,8 +584,10 @@ func (ws *workspace) applyScanState(dir string, found []git.Repo, changes []git.
 	if ws.activeRepo == "" || repoAt(ws.repos, ws.activeRepo) == nil {
 		ws.activeRepo = firstRepoWithChanges(found, changes)
 	}
-	ws.rebuildDerived()
-	ws.dirs.rebuildRows(ws.root, ws.changes)
+	if changed {
+		ws.rebuildDerived()
+		ws.dirs.rebuildRows(ws.root, ws.changes)
+	}
 }
 
 // rebuildDerived 重建派生数据：模型索引（changeByAbs）与各视图的派生

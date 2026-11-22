@@ -350,6 +350,22 @@
    根因）：`rebuildChangeRows` 构造 sideRow 时漏设 `open`，树展开正确但箭头
    永远显示 ▸——视图与数据静默脱节。既有测试只断言「行文本在场」，抓不到
    状态字段错误；行字段（open/depth/letter）要进断言（见 sidebar_row_test）。
+18. **重读-比对-落地：身份不变的刷新必须先比对再动状态**（2026-11-22，焦点
+   刷新把没变化的历史页整个重载的根因）：刷新全是「提示后重读」模型，但
+   落地曾只有部分守卫。规则：身份变化（换 root/仓库/打开对象）才 eager
+   invalidate；身份不变的例行重读一律后台读、应用前 `slices.Equal` 比对，
+   一致就整体丢弃——不置 loading、不清选中/详情、不重建派生。守卫清单：
+   `applyFile` same（文件）、`applyDiffState` sidesContentEqual（diff）、
+   `reloadDirs` fsEntriesEqual（目录缓存）、`applyReloadedCommits` 首页前缀
+   比对（提交历史，hash 含父链故首页代表全史）、`applyScanState`（扫描）、
+   `mergeChanges` 逐仓库分段（watch 合并——整表比对恒不等，合并把段移尾）、
+   `structureChanged`（仓库集合兜底）。两个边界：① Change/Repo/CommitRow
+   只含 git 状态不含文件内容，纯内容修改产生的列表逐值相同，被正确跳过
+   （文件/diff 视图才按内容比对，因为展示的就是内容）；② 测试断言刷新
+   「跑没跑」别用时间戳比较——Windows 时钟粗粒度，同一刻度内的两次
+   time.Now() 挂钟与单调读数都相等，`Equal`/`After` 都分不出（控制台打印
+   会因 I/O 跨刻度造成「加了日志就变绿」的假象），走语义副作用（如
+   clearErr 清哨兵错误）判定。
 
 ## 组件库（widgets.go）
 
@@ -375,3 +391,4 @@
 - Markdown 链接点击行为按官方组件默认（http/https/mailto 打开）。
 - pull 默认只允许快进，分叉时需勾选 rebase 或外部处理。
 - 提交搜索首次输入时加载完整历史（`git log --all`），超大仓库需要等待传输。
+- 搜索结果是发起时的数据快照，之后工作区变化不自动更新结果，重新搜索才是最新（2026-11-22 定为特性：与「重读-比对-落地」的会话状态保留一致，搜索命中也属于用户正打开的会话，被动清空/刷新反而丢上下文）。

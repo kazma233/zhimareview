@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -264,14 +265,38 @@ func (ws *workspace) handleFsEvents(root string, paths []string) {
 			if ws.mode != "work" || ws.root != root {
 				return
 			}
-			ws.mergeChanges(fresh, scoped)
-			ws.rebuildDerived()
-			ws.dirs.rebuildRows(ws.root, ws.changes)
+			if ws.mergeChanges(fresh, scoped) {
+				ws.rebuildDerived()
+				ws.dirs.rebuildRows(ws.root, ws.changes)
+			}
 		})
 }
 
-// mergeChanges 用 fresh 替换受影响仓库的条目，其余仓库保持。
-func (ws *workspace) mergeChanges(fresh []git.Change, scoped map[string]bool) {
+// mergeChanges 用 fresh 替换受影响仓库的条目，其余仓库保持；返回是否有变
+// 化。按「重读-比对-落地」：受影响仓库的改动段与当前一致（重读没读出新东
+// 西）时整体跳过，调用方不必重建派生。比对只能按仓库分段做——合并会把
+// scoped 段移到尾部，整表顺序必变，整表比对恒为不等。
+func (ws *workspace) mergeChanges(fresh []git.Change, scoped map[string]bool) bool {
+	old := map[string][]git.Change{}
+	for _, c := range ws.changes {
+		if scoped[c.RepoPath] {
+			old[c.RepoPath] = append(old[c.RepoPath], c)
+		}
+	}
+	freshByRepo := map[string][]git.Change{}
+	for _, c := range fresh {
+		freshByRepo[c.RepoPath] = append(freshByRepo[c.RepoPath], c)
+	}
+	unchanged := true
+	for path := range scoped {
+		if !slices.Equal(old[path], freshByRepo[path]) {
+			unchanged = false
+			break
+		}
+	}
+	if unchanged {
+		return false
+	}
 	out := make([]git.Change, 0, len(ws.changes)+len(fresh))
 	for _, c := range ws.changes {
 		if !scoped[c.RepoPath] {
@@ -279,6 +304,7 @@ func (ws *workspace) mergeChanges(fresh []git.Change, scoped map[string]bool) {
 		}
 	}
 	ws.changes = append(out, fresh...)
+	return true
 }
 
 // structureChanged 对比仓库集合（rel 集合）是否变化。

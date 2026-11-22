@@ -1117,3 +1117,37 @@ func TestCopyFilePath(t *testing.T) {
 		t.Errorf("file clipboard = %q, want %q", got, want)
 	}
 }
+
+// watch 合并落地比对：受影响仓库的改动段与当前一致（hint 命中但内容没变）
+// 时不重建派生，真变了才合并——实抓：合并走了整体替换重建。
+func TestMergeChangesSkipsUnchanged(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	p1 := ws.changeByAbs[root+"/base.txt"]
+
+	// 原样重存（编辑器保存未改内容）：重读段一致 → 不重建。纯内容修改
+	// 不算变化——比对对象是改动列表（git 状态），内容级修改产生的列表
+	// 逐值相同，正确地被跳过
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws.handleFsEvents(root, []string{"base.txt"})
+	if ws.changeByAbs[root+"/base.txt"] != p1 {
+		t.Fatal("derived index rebuilt on unchanged merge")
+	}
+
+	// 改动列表真变了（未暂存 → 暂存）：合并并重建
+	gitCmd(t, root, "add", "base.txt")
+	ws.handleFsEvents(root, []string{"base.txt"})
+	if ws.changeByAbs[root+"/base.txt"] == p1 {
+		t.Fatal("derived index not rebuilt on changed merge")
+	}
+}

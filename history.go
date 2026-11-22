@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -340,19 +341,46 @@ func (ws *workspace) invalidateCommits() {
 	ws.hist.statusLoading = false
 }
 
-// reloadCommits 让列表失效并按当前页重载（不在历史页时等进入页面再加载）。
-// 选中的提交按 hash 记下，列表回来后复位：重载不该把用户的选中弄丢。
-// 已有待复位的 hash（选中的提交还没加载到）时沿用，别让下一次刷新把它忘掉。
+// reloadCommits 是外部 git 操作后的历史重读（focus/切 tab/顶栏刷新/pull/
+// fetch/revert 收尾都会走到）。按「重读-比对-落地」：先读首页再与当前列表
+// 比对，历史没变整体不动（不置 loading、不清选中与详情、不丢翻页与搜索
+// 状态），变了才失效重置。不在历史页也重读——为了回来时列表即时不闪。
+// 首页比对足以代表整个历史：提交 hash 含父 hash 链，历史任何改动都会改到
+// 顶端首页。
 func (ws *workspace) reloadCommits() {
+	repo := ws.activeRepo
+	if repo == "" {
+		return
+	}
+	gen := ws.hist.gen
+	loadAsync(ws, func() logResult {
+		page, err := git.LogCommits(repo, 0, commitPageSize)
+		return logResult{page: page, err: err}
+	}, func(r logResult) { ws.applyReloadedCommits(gen, repo, r.page, r.err) })
+}
+
+// applyReloadedCommits 应用重读结果：与当前已加载列表的前缀一致（历史未变）
+// 就整体丢弃；变了才按重载语义重置落地，用已读到的首页直接应用（不再二次
+// 读取）。重读失败保留现有列表只报错——读取失败不是内容变化，不该清掉用户
+// 正在看的东西。
+func (ws *workspace) applyReloadedCommits(gen int, repo string, page []git.CommitRow, err error) {
+	if ws.hist.gen != gen || ws.activeRepo != repo {
+		return
+	}
+	if err != nil {
+		ws.setErr("读取提交历史失败", err.Error())
+		return
+	}
+	if n := len(page); n <= len(ws.hist.all) && slices.Equal(page, ws.hist.all[:n]) {
+		return
+	}
 	restore := ws.hist.restore
 	if restore == "" && ws.hist.sel >= 0 && ws.hist.sel < len(ws.hist.commits) {
 		restore = ws.hist.commits[ws.hist.sel].Hash
 	}
 	ws.invalidateCommits()
 	ws.hist.restore = restore
-	if ws.mainTab == 1 {
-		ws.loadCommits()
-	}
+	ws.applyCommits(ws.hist.gen, repo, page, nil)
 }
 
 // restoreSelection 在列表重建后把选中复位到 reloadCommits 记下的提交：
