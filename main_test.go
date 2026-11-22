@@ -490,11 +490,15 @@ func cloneWithRemote(t *testing.T) (origin, work string) {
 	gitRun(t, seed, "push", "-u", "origin", "main")
 	origin = base + "/origin"
 	work = base + "/work"
-	gitRun(t, base, "clone", remote, origin)
-	gitRun(t, base, "clone", remote, work)
+	// clone 时单次 -c 关 autocrlf：clone 自带的 checkout 也走 LF，不依赖
+	// 机器的系统级配置（事后设 config 救不回 clone 已经写出的 CRLF 工作区）
+	gitRun(t, base, "-c", "core.autocrlf=false", "clone", remote, origin)
+	gitRun(t, base, "-c", "core.autocrlf=false", "clone", remote, work)
 	for _, dir := range []string{origin, work} {
 		gitRun(t, dir, "config", "user.name", "t")
 		gitRun(t, dir, "config", "user.email", "t@t")
+		// autocrlf 关掉：clone 的 checkout 不依赖机器的系统级配置换行行为
+		gitRun(t, dir, "config", "core.autocrlf", "false")
 	}
 	return origin, work
 }

@@ -48,6 +48,9 @@ func searchWorkspace(t *testing.T) (*workspace, *ui.Tester, string) {
 	write("chainX/chainY/needledeep.txt", "deep needle\n")
 	run(root, "init") // 根目录不是仓库（无 .git）
 	run(repo, "init")
+	// 仓库级身份：夹具的 commit 不依赖全局 git 配置
+	run(repo, "config", "user.name", "t")
+	run(repo, "config", "user.email", "t@t")
 	run(repo, "add", ".")
 	run(repo, "commit", "-m", "init")
 

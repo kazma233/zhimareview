@@ -366,6 +366,17 @@
    time.Now() 挂钟与单调读数都相等，`Equal`/`After` 都分不出（控制台打印
    会因 I/O 跨刻度造成「加了日志就变绿」的假象），走语义副作用（如
    clearErr 清哨兵错误）判定。
+19. **git 测试夹具一律自洽：临时目录自建仓库 + 仓库级配置，不依赖全局/系统
+   配置**（2026-11-22，本机无全局身份时 12 个用例失败引出的规则）：夹具建仓
+   后立即 `git config user.name/user.email`（仓库级）；clone 场景用
+   `git -c core.autocrlf=false clone`——clone 自带的 checkout 也必须关掉
+   autocrlf，事后设 config 救不回 clone 已写出的 CRLF 工作区（git 会把
+   CRLF 工作区判成已修改，pull 直接被拒）。已知平台边界：Windows/NTFS 的
+   文件名冒号是备用数据流分隔符，`os.WriteFile("a:b.txt")` 落盘成文件 a +
+   流 b.txt，冒号文件名用例在 Windows 上无法作为常规文件存在（search 契约
+   的冒号断言按 GOOS 收缩）；另 git 2.54 的 grep 对含冒号路径一律把冒号
+   替换成 U+F03A（连 -z 也替换），现代 git 上冒号路径的内容命中即使文件可
+   建也可能失真——相邻产品问题，待议（Unix 行为 unverified）。
 
 ## 组件库（widgets.go）
 

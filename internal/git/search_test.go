@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -30,6 +31,9 @@ func searchRepo(t *testing.T) string {
 	write("odd:name.txt", "colon:name\nneedle inside\n")
 	write("u.txt", "untracked needle here\n")
 	run("init")
+	// 仓库级身份：夹具的 commit 不依赖全局 git 配置
+	run("config", "user.name", "t")
+	run("config", "user.email", "t@t")
 	run("add", ".")
 	run("commit", "-m", "init")
 	return dir
@@ -64,9 +68,17 @@ func TestSearchNames(t *testing.T) {
 func TestSearchContents(t *testing.T) {
 	dir := searchRepo(t)
 
+	// Windows/NTFS 的文件名冒号是备用数据流分隔符："odd:name.txt" 落盘成
+	// 文件 odd + 数据流 name.txt，冒号文件名在该平台无法作为常规文件存在，
+	// 冒号契约（NUL 分隔不被 path:line 解析错位）不可测，断言按平台收缩
+	colonFile := runtime.GOOS != "windows"
+	want := 3
+	if !colonFile {
+		want = 2
+	}
 	hits := SearchContents(dir, "needle")
-	if len(hits) != 3 {
-		t.Fatalf("hits = %+v, want 3 lines (tracked + colon file + untracked)", hits)
+	if len(hits) != want {
+		t.Fatalf("hits = %+v, want %d lines (tracked + colon file + untracked)", hits, want)
 	}
 	byPath := map[string]ContentHit{}
 	for _, h := range hits {
@@ -76,18 +88,20 @@ func TestSearchContents(t *testing.T) {
 	if h.Line != 1 || h.Text != "hello needle world" {
 		t.Fatalf("a.txt hit = %+v", h)
 	}
-	// 冒号文件名：NUL 分隔下不会被 path:line 解析错位
-	h, ok := byPath["odd:name.txt"]
-	if !ok || h.Line != 2 || h.Text != "needle inside" {
-		t.Fatalf("colon name hit = %+v, want line 2", h)
+	if colonFile {
+		// 冒号文件名：NUL 分隔下不会被 path:line 解析错位
+		h, ok := byPath["odd:name.txt"]
+		if !ok || h.Line != 2 || h.Text != "needle inside" {
+			t.Fatalf("colon name hit = %+v, want line 2", h)
+		}
 	}
-	h, ok = byPath["u.txt"]
+	h, ok := byPath["u.txt"]
 	if !ok || h.Line != 1 {
 		t.Fatalf("untracked hit = %+v", h)
 	}
 	// 不分大小写
-	if hits := SearchContents(dir, "NEEDLE"); len(hits) != 3 {
-		t.Fatalf("NEEDLE hits = %d, want 3 (case-insensitive)", len(hits))
+	if hits := SearchContents(dir, "NEEDLE"); len(hits) != want {
+		t.Fatalf("NEEDLE hits = %d, want %d (case-insensitive)", len(hits), want)
 	}
 	if hits := SearchContents(dir, "zzz"); len(hits) != 0 {
 		t.Fatalf("zzz hits = %v, want empty", hits)
@@ -122,8 +136,13 @@ func TestSearchAllConcurrent(t *testing.T) {
 	if len(names[dir]) != 1 {
 		t.Fatalf("names = %v", names)
 	}
+	// Windows/NTFS 上冒号文件名不可作为常规文件存在（见 TestSearchContents）
+	want := 3
+	if runtime.GOOS == "windows" {
+		want = 2
+	}
 	contents := SearchContentsAll(repos, "needle")
-	if len(contents[dir]) != 3 {
+	if len(contents[dir]) != want {
 		t.Fatalf("contents = %v", contents)
 	}
 }

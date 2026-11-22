@@ -174,7 +174,9 @@ func TestHandleFsEventsReloadDiffAppliesChange(t *testing.T) {
 // 目录模式：目录级 hint 命中已加载目录 → 重读缓存并重建行（新增文件入行）。
 func TestHandleFsEventsReloadDirs(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
-	sub := filepath.Join(root, "sub")
+	// 与 readDirEntries 的条目链同风格（root 派生的 / 分隔）：filepath.Join
+	// 在 Windows 产出反斜杠，expanded/cache 的 key 会和行 id 分裂，open 恒 false
+	sub := root + "/sub"
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
