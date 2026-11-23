@@ -60,13 +60,30 @@ func TestSessionRoundtrip(t *testing.T) {
 	if got := LoadSession(dir); got != nil {
 		t.Fatalf("LoadSession(missing) = %v, want nil", got)
 	}
-	want := Session{Roots: []string{"/a", "/b"}, Active: 1}
+	want := Session{Tabs: []Tab{
+		{Root: "/a"},
+		{Root: "/b", Name: "前端", Color: "red"},
+	}, Active: 1}
 	if err := SaveSession(dir, want); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadSession(dir)
-	if got == nil || len(got.Roots) != 2 || got.Roots[1] != "/b" || got.Active != 1 {
+	if got == nil || len(got.Tabs) != 2 || got.Tabs[1] != want.Tabs[1] || got.Active != 1 {
 		t.Fatalf("LoadSession() = %+v, want %+v", got, want)
+	}
+}
+
+// 旧版 session.json 只有 roots 字符串；读取时转换为带空元数据的 Tab。
+func TestLoadSessionLegacyRoots(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte(`{"roots":["/a","/b"],"active":1}`)
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadSession(dir)
+	want := []Tab{{Root: "/a"}, {Root: "/b"}}
+	if got == nil || len(got.Tabs) != 2 || got.Tabs[0] != want[0] || got.Tabs[1] != want[1] || got.Active != 1 {
+		t.Fatalf("LoadSession(legacy) = %+v, want tabs %+v active 1", got, want)
 	}
 }
 
@@ -82,27 +99,27 @@ func TestLoadSessionCorruptFile(t *testing.T) {
 
 func TestSaveSessionEmptyOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	if err := SaveSession(dir, Session{Roots: []string{"/a"}, Active: 0}); err != nil {
+	if err := SaveSession(dir, Session{Tabs: []Tab{{Root: "/a"}}, Active: 0}); err != nil {
 		t.Fatal(err)
 	}
 	// 全 pick 关闭：空会话必须覆盖旧记录，否则旧 tab 在下次启动复活
-	if err := SaveSession(dir, Session{Roots: nil, Active: -1}); err != nil {
+	if err := SaveSession(dir, Session{Tabs: nil, Active: -1}); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadSession(dir)
-	if got == nil || len(got.Roots) != 0 {
-		t.Fatalf("LoadSession() = %+v, want empty roots", got)
+	if got == nil || len(got.Tabs) != 0 {
+		t.Fatalf("LoadSession() = %+v, want empty tabs", got)
 	}
 }
 
 func TestLoadSessionFiltersEmptyRoots(t *testing.T) {
 	dir := t.TempDir()
-	data := []byte(`{"roots":["/a","","/b"],"active":2}`)
+	data := []byte(`{"tabs":[{"root":"/a"},{"root":""},{"root":"/b"}],"active":2}`)
 	if err := os.WriteFile(filepath.Join(dir, "session.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadSession(dir)
-	if got == nil || len(got.Roots) != 2 || got.Active != 2 {
-		t.Fatalf("LoadSession() = %+v, want 2 roots with active 2", got)
+	if got == nil || len(got.Tabs) != 2 || got.Active != 2 {
+		t.Fatalf("LoadSession() = %+v, want 2 tabs with active 2", got)
 	}
 }

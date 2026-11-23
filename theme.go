@@ -81,6 +81,41 @@ func appTokens(c *ui.Context) tokens {
 	}
 }
 
+// tab 色条的预设键：会话里存键而不是 hex，渲染时经 tokens.tabColor 取色，
+// 深浅主题切换不需要迁移数据；固定中调与状态色同源，两套主题下都可读。
+const (
+	tabColorRed    = "red"
+	tabColorOrange = "orange"
+	tabColorGreen  = "green"
+	tabColorBlue   = "blue"
+	tabColorPurple = "purple"
+	tabColorPink   = "pink"
+	tabColorGray   = "gray"
+)
+
+// tabColor 把持久化的颜色键映射为令牌色；空键或未知键返回 false（不画
+// 色条），旧会话里的无效值因此自然退化为默认外观。
+func (tk tokens) tabColor(key string) (ui.Color, bool) {
+	switch key {
+	case tabColorRed:
+		return tk.StatusDel, true
+	case tabColorOrange:
+		return tk.StatusMod, true
+	case tabColorGreen:
+		return tk.StatusAdd, true
+	case tabColorBlue:
+		return tk.StatusRen, true
+	case tabColorPurple:
+		return ui.Hex("#a855f7"), true
+	case tabColorPink:
+		return ui.Hex("#ec4899"), true
+	case tabColorGray:
+		return tk.Muted, true
+	default:
+		return ui.Color{}, false
+	}
+}
+
 // rankColor 把状态等级映射为令牌色；无状态与其他（rankNone/rankOther）
 // 用弱化文本色。颜色归主题层：等级常量由 sidebar.go 单点定义（U 与 A
 // 同为 2，共享绿色）。

@@ -49,9 +49,25 @@ func RememberRecent(dir, root string) []string {
 	return out
 }
 
+// Tab 是会话里一个项目 tab：根目录 + 用户自定义的展示名与颜色键。
+// 名称/颜色为空表示按根目录自动命名、不设色；tab 内部的查看状态不恢复。
+type Tab struct {
+	Root  string `json:"root"`
+	Name  string `json:"name,omitempty"`
+	Color string `json:"color,omitempty"`
+}
+
 // Session 是一次关闭时的窗口会话：打开了哪些项目 tab（按 tab 顺序）与
-// 激活下标。只存根目录，tab 内部的查看状态不恢复。
+// 激活下标。
 type Session struct {
+	Tabs   []Tab `json:"tabs,omitempty"`
+	Active int   `json:"active"`
+}
+
+// sessionFile 是 session.json 的磁盘形状。roots 是 tab 元数据加入前的
+// 旧格式（只有根目录字符串），读取一次转换为 Tabs，写入只走新格式。
+type sessionFile struct {
+	Tabs   []Tab    `json:"tabs"`
 	Roots  []string `json:"roots"`
 	Active int      `json:"active"`
 }
@@ -62,20 +78,27 @@ func LoadSession(dir string) *Session {
 	if err != nil {
 		return nil
 	}
-	var s Session
-	if err := json.Unmarshal(data, &s); err != nil {
+	var f sessionFile
+	if err := json.Unmarshal(data, &f); err != nil {
 		return nil
 	}
-	out := make([]string, 0, len(s.Roots))
-	for _, root := range s.Roots {
-		if root != "" {
-			out = append(out, root)
+	tabs := f.Tabs
+	if len(tabs) == 0 {
+		tabs = make([]Tab, len(f.Roots))
+		for i, root := range f.Roots {
+			tabs[i].Root = root
 		}
 	}
-	return &Session{Roots: out, Active: s.Active}
+	out := make([]Tab, 0, len(tabs))
+	for _, tab := range tabs {
+		if tab.Root != "" {
+			out = append(out, tab)
+		}
+	}
+	return &Session{Tabs: out, Active: f.Active}
 }
 
-// SaveSession 持久化会话。空 Roots 也是合法状态（上次关闭时没有打开的
+// SaveSession 持久化会话。空 Tabs 也是合法状态（上次关闭时没有打开的
 // 项目），必须落盘覆盖旧记录——不写会让更早的会话在下次启动复活。
 func SaveSession(dir string, s Session) error {
 	data, err := json.Marshal(s)

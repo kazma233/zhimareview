@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"zhimareview/internal/git"
-	"zhimareview/internal/store"
 )
 
 // 外部 git 操作（commit / add / stash）只改 .git 内部状态，被监听的路径
@@ -17,7 +16,7 @@ import (
 // 必经 applyScanState 的 clearErr，用哨兵错误验证跑没跑），不做时间戳比较
 // ——Windows 时钟粗粒度，同一刻度内的两次 time.Now() 挂钟与单调读数都相等。
 func TestRefreshOnDemandThrottle(t *testing.T) {
-	a := restoreApplication(&store.Session{Roots: []string{"/tmp/projA"}, Active: 0})
+	a := restoreApplication(testSession(0, "/tmp/projA"))
 	ws := a.activeTab()
 
 	// 刚扫过 → 跳过：哨兵错误不被清
@@ -48,7 +47,7 @@ func TestRefreshOnDemandSkipsPick(t *testing.T) {
 
 // 切 tab 触发新激活 tab 的重扫。
 func TestTabSwitchRefreshesNewTab(t *testing.T) {
-	a := restoreApplication(&store.Session{Roots: []string{"/tmp/projA", "/tmp/projB"}, Active: 0})
+	a := restoreApplication(testSession(0, "/tmp/projA", "/tmp/projB"))
 	first, second := a.tabs[0], a.tabs[1]
 	// 模拟「上次扫描很久之前」，切 tab 时应当触发重扫
 	first.lastRefresh = time.Now().Add(-2 * refreshThrottle)

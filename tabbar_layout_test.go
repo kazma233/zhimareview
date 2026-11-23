@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"zhimareview/internal/store"
 )
 
 // 标题栏区布局回归：模拟 TitleBarHidden 下系统报告的红绿灯占位
@@ -13,7 +12,7 @@ import (
 // tab 条与灯对齐、内容区层次与留白——防「tab 低于红绿灯」「tab 压灯」
 // 类真机问题复发。
 func TestTabBarLayoutWithNativeTitleBar(t *testing.T) {
-	a := restoreApplication(&store.Session{Roots: []string{"/tmp/projA", "/tmp/sandbox"}, Active: 0})
+	a := restoreApplication(testSession(0, "/tmp/projA", "/tmp/sandbox"))
 	tt := ui.NewTester(a.view, 930, 600)
 	tt.SetTitleBar(ui.TitleBar{Height: 28, Left: 80, Bottom: 28})
 	tt.Frame()
@@ -62,7 +61,7 @@ func TestTabBarOverflowScrolls(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		roots = append(roots, fmt.Sprintf("/tmp/scrollcase-%02d", i))
 	}
-	a := restoreApplication(&store.Session{Roots: roots, Active: 0})
+	a := restoreApplication(testSession(0, roots...))
 	tt := ui.NewTester(a.view, 930, 600)
 	tt.SetTitleBar(ui.TitleBar{Height: 28, Left: 80, Bottom: 28})
 	tt.Frame()
@@ -98,7 +97,7 @@ func TestTabBarCloseMidFrameNoPanic(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		roots = append(roots, fmt.Sprintf("/tmp/closecase-%02d", i))
 	}
-	a := restoreApplication(&store.Session{Roots: roots, Active: 5})
+	a := restoreApplication(testSession(5, roots...))
 	tt := ui.NewTester(a.view, 930, 600)
 	tt.SetTitleBar(ui.TitleBar{Height: 28, Left: 80, Bottom: 28})
 	tt.Frame()

@@ -2,6 +2,9 @@ package main
 
 import (
 	"path/filepath"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -95,6 +98,11 @@ func tabBar(c *ui.Context, a *application) {
 // 固定步长跨窗口尺寸行为一致。
 const tabScrollStep float32 = 200
 
+// tabRenameBlurDelay 是失焦提交重命名的延迟：一次点击的按下与释放之间
+// 隔着一次事件循环，立即收窄 tab 会让释放点落到移走的 tab 外，导致切换
+// tab 的首击被吞。延迟只影响提交时机，不影响输入与 Esc/Enter。
+const tabRenameBlurDelay = 80 * time.Millisecond
+
 // tabArrow 渲染单个实心三角滚动箭头（dir -1 左 / +1 右）。恒在：没溢出
 // （MaxX 是上一帧布局写入的滚动余量）或已滚到对应尽头时置灰禁用。
 // 点击平滑滚一个步长（Spring）。
@@ -140,25 +148,42 @@ func drawSolidArrow(p *ui.Painter, r ui.Rect, right bool, color ui.Color) {
 	p.FillPath(&path, color)
 }
 
+// tabColorMenu 是右键「颜色」子菜单的顺序与文案；颜色本身由 tokens 映射。
+var tabColorMenu = []struct{ key, label string }{
+	{tabColorRed, "红"},
+	{tabColorOrange, "橙"},
+	{tabColorGreen, "绿"},
+	{tabColorBlue, "蓝"},
+	{tabColorPurple, "紫"},
+	{tabColorPink, "粉"},
+	{tabColorGray, "灰"},
+}
+
 // tabView 渲染单个 tab：项目名 + 关闭钮。每个 tab 都有独立胶囊底做分割：
 // 激活态高对比底 + 字重 600，非激活态 subtle 底（hover 加深）；标签 ClipX
 // 放弃 min-content 地板，tab 多时收缩出省略号而不是把 ＋ 挤出条外。
-// × 是行内独立按钮，吃掉该点击不触发 tab 选择。
+// × 是行内独立按钮，吃掉该点击不触发 tab 选择。tab 也是拖拽源与放置目标，
+// 右键菜单提供重命名与颜色；重命名时标题位置换成输入框。
 func tabView(c *ui.Context, a *application, tabs ui.TabsParts, i int, barH float32) {
 	tk := appTokens(c)
 	ws := a.tabs[i]
-	name := "新标签页"
-	if ws.mode == "work" {
-		name = filepath.Base(ws.root)
-	}
 	tab := tabs.Tab(i).Height(barH - 6).Radius(tk.RowRadius).
-		PaddingX(8).Gap(4).AlignItems(ui.Center).ClipX().
-		Label("标签页 " + name)
-	// 有未读错误时 tab 带红点：提示这个 tab 出过错（看过弹窗即消失）。
-	// 错误内容仍留在 tab 上，悬停提示给出错误标题
-	if ws.err != nil {
-		tab.Tooltip(ws.err.title)
+		PaddingX(8).Gap(4).AlignItems(ui.Center).ClipX()
+	// 失焦提交延迟一拍（tabRenameBlurDelay）：按下别的控件时，释放事件
+	// 要等下一次事件循环；立即收窄 tab 会让释放点落到移走的 tab 外，
+	// 首次点击被吞（实测）。焦点回来则取消挂起的提交。
+	if ws.tabMeta.blurPending {
+		switch {
+		case tab.FocusWithin():
+			ws.tabMeta.blurPending = false
+		case !c.Now().Before(ws.tabMeta.blurAt):
+			ws.finishTabRename(true)
+		}
 	}
+	name := ws.tabTitle()
+	editing := ws.tabMeta.renaming
+	tab.Label("标签页 " + name)
+	tab.Tooltip(ws.tabTooltip())
 	if i != a.active {
 		// 非激活：subtle 底把相邻 tab 视觉分开，hover 加深给可选反馈
 		bg := tk.Text.Alpha(0.05)
@@ -169,14 +194,58 @@ func tabView(c *ui.Context, a *application, tabs ui.TabsParts, i int, barH float
 	} else {
 		tab.Background(tk.Background)
 	}
+	// 重命名中不挂拖拽源：输入框内的按压属于文本编辑，不能被拖拽手势吃掉
+	if !editing {
+		tab.Drag(i)
+	}
+	dragSrc, dragOver := ui.DragOver[int](tab)
+	color, hasColor := tk.tabColor(ws.tabMeta.color)
+	// 底部色条与拖拽插入线都画在内容之上：色条不占文字宽度，插入线
+	// 指示松手后源 tab 会落在目标的哪一侧（向右拖画右缘，向左拖画左缘）。
+	if hasColor || (dragOver && dragSrc != i) {
+		tab.DrawOver(func(p *ui.Painter, r ui.Rect) {
+			if hasColor && r.W > 20 {
+				h := float32(2)
+				p.Fill(ui.Rect{X: r.X + 6, Y: r.Y + r.H - h - 1, W: r.W - 12, H: h}, color, h/2)
+			}
+			if dragOver && dragSrc != i {
+				x := r.X
+				if dragSrc < i {
+					x = r.X + r.W - 2
+				}
+				p.Fill(ui.Rect{X: x, Y: r.Y + 3, W: 2, H: r.H - 6}, tk.Accent, 1)
+			}
+		})
+	}
 	// 内容必须在 Children 闭包内创建：节点在创建时挂到当前父容器，
 	// 闭包外建的元素不会进 tab（挂载契约，见 docs 坑记录）
 	tab.Children(func() {
-		label := ui.Text(c, name).FontSize(tk.FontSM).SingleLine().ClipX()
-		if i == a.active {
-			label.FontWeight(600)
+		if editing {
+			inp := ui.TextInputBase(c.Key(ws), &ws.tabMeta.draft).
+				Width(ws.renameInputWidth()).Height(barH-12).Padding(0, 4).Radius(3).
+				FontSize(tk.FontSM).Background(tk.Background).Border(1, tk.Border).Shrink(0)
+			if ws.tabMeta.renameFocus {
+				ws.tabMeta.renameFocus = false
+				inp.Focus()
+				inp.SetTextSelection(0, utf8.RuneCountInString(ws.tabMeta.draft))
+			}
+			switch {
+			case inp.Submitted():
+				ws.finishTabRename(true)
+			case inp.Shortcut(0, ui.KeyEscape):
+				ws.finishTabRename(false)
+			case inp.FocusLeft():
+				ws.tabMeta.blurPending = true
+				ws.tabMeta.blurAt = c.Now().Add(tabRenameBlurDelay)
+				c.After(tabRenameBlurDelay)
+			}
 		} else {
-			label.TextColor(tk.Muted)
+			label := ui.Text(c, name).FontSize(tk.FontSM).SingleLine().ClipX()
+			if i == a.active {
+				label.FontWeight(600)
+			} else {
+				label.TextColor(tk.Muted)
+			}
 		}
 		// 未读错误标记：错误弹窗只在该 tab 激活时弹，后台 tab 的错误靠
 		// 这个红点提示存在；用户看过弹窗后红点消失
@@ -191,4 +260,95 @@ func tabView(c *ui.Context, a *application, tabs ui.TabsParts, i int, barH float
 			a.queueCloseTab(i)
 		}
 	})
+	if !editing && tab.DoubleClicked() {
+		ws.startTabRename()
+	}
+	if from, ok := ui.Drop[int](tab); ok && from >= 0 && from < len(a.tabs) && from != i {
+		a.queueMoveTab(a.tabs[from], a.tabs[i])
+	}
+	tab.ContextMenu(func(m *ui.Menu) {
+		if m.Item("重命名").Disabled(editing).Chosen() {
+			ws.startTabRename()
+		}
+		m.Submenu("颜色", func(sub *ui.Menu) {
+			if sub.Item("无颜色").Radio(ws.tabMeta.color == "").Chosen() {
+				ws.setTabColor("")
+			}
+			for _, opt := range tabColorMenu {
+				if sub.Item(opt.label).Radio(ws.tabMeta.color == opt.key).Chosen() {
+					ws.setTabColor(opt.key)
+				}
+			}
+		})
+	})
+	// 只记非编辑态的宽度：编辑框按它定宽，避免输入框出现/消失时整条
+	// tab 变宽变窄，后面的 tab 在点击过程中移出指针落点。
+	if !editing {
+		if w := tab.Bounds().W; w > 0 {
+			ws.tabMeta.width = w
+		}
+	}
+}
+
+// renameInputWidth 让编辑框与原 tab 内容近似同宽：扣掉左右 padding、与
+// 关闭钮的 gap 和关闭钮本身，未读错误点占据的 10px 也扣掉；未知宽度或
+// 过窄时兜底，保证输入可用。
+func (ws *workspace) renameInputWidth() float32 {
+	w := ws.tabMeta.width
+	if w <= 0 {
+		return 140
+	}
+	w -= 16 + 4 + 14
+	if ws.err != nil && !ws.errSeen {
+		w -= 10
+	}
+	return min(max(w, 40), 320)
+}
+
+// startTabRename 进入内联编辑：草稿从当前展示名开始，下一帧输入框聚焦并
+// 全选，用户直接输入即可替换。
+func (ws *workspace) startTabRename() {
+	ws.tabMeta.draft = ws.tabTitle()
+	ws.tabMeta.renaming = true
+	ws.tabMeta.renameFocus = true
+	ws.tabMeta.blurPending = false
+	ws.tabMeta.blurAt = time.Time{}
+}
+
+// finishTabRename 结束编辑：commit 时 trim 后落地（空串=回自动名，与自动
+// 名相同也清空覆盖，避免会话里存冗余名字）；取消只退出编辑。
+func (ws *workspace) finishTabRename(commit bool) {
+	if !ws.tabMeta.renaming {
+		return
+	}
+	ws.tabMeta.renaming = false
+	ws.tabMeta.renameFocus = false
+	ws.tabMeta.blurPending = false
+	ws.tabMeta.blurAt = time.Time{}
+	if !commit {
+		return
+	}
+	name := strings.TrimSpace(ws.tabMeta.draft)
+	if ws.mode == "work" && name == filepath.Base(ws.root) {
+		name = ""
+	}
+	ws.tabMeta.name = name
+	if ws.app != nil {
+		if ws == ws.app.activeTab() {
+			ws.app.syncTitle()
+		}
+		ws.app.saveSession()
+	}
+}
+
+// setTabColor 落地右键菜单选择的颜色键；空串表示清除。颜色不影响其他
+// tab 状态，下一帧重绘即可，不需要走 tab 操作队列。
+func (ws *workspace) setTabColor(key string) {
+	if ws.tabMeta.color == key {
+		return
+	}
+	ws.tabMeta.color = key
+	if ws.app != nil {
+		ws.app.saveSession()
+	}
 }

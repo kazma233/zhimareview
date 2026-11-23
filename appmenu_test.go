@@ -5,7 +5,6 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"zhimareview/internal/store"
 )
 
 // 应用菜单（appmenu.go）：Cmd/Ctrl+W 关标签页、Cmd/Ctrl+Q 退出的模板接线
@@ -68,7 +67,7 @@ func TestAppMenuNonMac(t *testing.T) {
 // 「关闭标签页」点击走帧安全入队路径：不直接改 tab 集合，下一帧 flush
 // 时才应用。
 func TestAppMenuCloseTabClick(t *testing.T) {
-	a := restoreApplication(&store.Session{Roots: []string{"/tmp/projA", "/tmp/sandbox"}, Active: 0})
+	a := restoreApplication(testSession(0, "/tmp/projA", "/tmp/sandbox"))
 	tt := ui.NewTester(a.view, 1180, 800)
 	tt.Frame()
 	tt.Frame()

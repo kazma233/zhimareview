@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
-	"zhimareview/internal/store"
 )
 
 // 错误以弹窗呈现：标题与正文都在框内，复制按钮把完整错误写进剪贴板，
@@ -13,7 +12,7 @@ import (
 
 func errApp(t *testing.T) (*application, *ui.Tester) {
 	t.Helper()
-	a := restoreApplication(&store.Session{Roots: []string{"/tmp/projA"}, Active: 0})
+	a := restoreApplication(testSession(0, "/tmp/projA"))
 	tt := ui.NewTester(a.view, 1180, 800)
 	tt.Frame()
 	tt.Frame()

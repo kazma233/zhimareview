@@ -16,6 +16,26 @@ import (
 	"zhimareview/internal/store"
 )
 
+// tabMeta 是 tab 条上的展示元数据：用户重命名/设色与内联编辑态。归该
+// tab 的 workspace 所有，随会话按 tab 顺序持久化（name/color）。
+type tabMeta struct {
+	// name 空=按根目录自动命名；color 空=无颜色，否则是 theme.go 的预设键
+	name  string
+	color string
+	// renaming 时标题位置换成输入框，draft 是编辑中的文本；
+	// renameFocus 是一次性聚焦/全选标记（开始编辑后的首帧消费）
+	renaming    bool
+	draft       string
+	renameFocus bool
+	// blurPending/blurAt 把「失焦提交」推迟一拍：失焦发生在按下另一控件
+	// 的那一帧，若同帧收窄 tab，释放事件会落空、点击丢给空白（实测）。
+	blurPending bool
+	blurAt      time.Time
+	// width 是上一帧非编辑态的 tab 宽度：重命名输入框按它收窄，避免提交
+	// 时 tab 收窄、后面的 tab 横向跳动（点击因此落空）。
+	width float32
+}
+
 // workspace 是一个 tab 的完整状态。单窗多 tab 模型下每个 tab 独立持有
 // 一个 workspace，互不共享可变状态；跨 tab 共享的只有最近目录列表与会话
 // （internal/store），归 application 编排。
@@ -32,9 +52,10 @@ type workspace struct {
 
 	// mode 是 tab 的两态：选目录（pick）或工作区（work）。
 	// pick 是初始态；选定目录后进入 work。
-	mode   string
-	root   string
-	recent []string
+	mode    string
+	root    string
+	recent  []string
+	tabMeta tabMeta
 	// err 是横切错误反馈：写点在各管线的失败分支（runWrite/各 apply），
 	// 成功路径清空；以弹窗呈现（errdialog.go），不占布局
 	err     *errInfo
@@ -92,6 +113,36 @@ func newWorkspace(app *application) *workspace {
 	}
 }
 
+// tabTitle 是 tab 条与窗口标题共用的展示名：用户重命名优先，否则 work
+// 态取根目录名、pick 态是入口页标题。
+func (ws *workspace) tabTitle() string {
+	if ws.tabMeta.name != "" {
+		return ws.tabMeta.name
+	}
+	if ws.mode == "work" {
+		return filepath.Base(ws.root)
+	}
+	return "新标签页"
+}
+
+// tabTooltip 是 tab 悬停概况：全路径 + 仓库/改动数量，扫描中替代计数，
+// 错误标题追加一行。生成的字符串每帧随状态派生，不做缓存。
+func (ws *workspace) tabTooltip() string {
+	if ws.mode != "work" {
+		return "新标签页 · 未选择目录"
+	}
+	body := ws.root
+	if ws.scanning {
+		body += "\n扫描中…"
+	} else {
+		body += fmt.Sprintf("\n%d 个仓库 · %d 处改动", len(ws.repos), len(ws.changes))
+	}
+	if ws.err != nil {
+		body += "\n错误：" + ws.err.title
+	}
+	return body
+}
+
 // application 是应用壳：单窗口承载多个项目 tab，每 tab 一个 workspace。
 // 窗口级状态（窗口、tab 集合、激活下标）归它，workspace 之间不共享可变
 // 状态；跨 tab 共享的最近目录与会话（internal/store）也由它写。
@@ -113,6 +164,15 @@ type application struct {
 	// 的快照记，tabBar 渲染完 flushTabOps 统一应用
 	pendingCloses []int
 	pendingNew    bool
+	// pendingMoves 是本帧入队的 tab 重排。from/to 按 workspace 身份记录：
+	// 关闭会改变下标，帧末应用时不能再相信入队时的位置。
+	pendingMoves []tabMove
+}
+
+// tabMove 是一次重排：把 from 移到 to 所在的位置。
+type tabMove struct {
+	from *workspace
+	to   *workspace
 }
 
 // app 是应用壳单例：单窗口模型下整个进程只有一个实例，由 openAppWindow
@@ -135,10 +195,12 @@ func newApplication(userDir string) *application {
 func restoreApplication(sess *store.Session) *application {
 	a := &application{}
 	if sess != nil {
-		for _, root := range sess.Roots {
+		for _, tab := range sess.Tabs {
 			ws := a.newTabWorkspace()
-			ws.root = root
+			ws.root = tab.Root
 			ws.mode = "work"
+			ws.tabMeta.name = tab.Name
+			ws.tabMeta.color = tab.Color
 			a.tabs = append(a.tabs, ws)
 		}
 		if n := len(a.tabs); n > 0 {
@@ -317,12 +379,43 @@ func (a *application) queueNewTab() {
 	a.pendingNew = true
 }
 
-// flushTabOps 应用本帧入队的 tab 增删。关闭按降序执行：入队索引都是帧
-// 开始时的快照，先删大索引不会让小索引失效。flush 后本帧剩余构建（内容
-// 区）读的是新 tab 集合；TabsBase 本帧仍按旧 n 建了 tab 元素，越界的
-// ids 槽位为空、选中项由下一帧的 len 钳回，框架侧安全。
+// queueMoveTab 入队一次拖拽重排；应用在帧末（flushTabOps），与关闭/新建
+// 共用唯一落地口，构建中途不改 a.tabs。
+func (a *application) queueMoveTab(from, to *workspace) {
+	if from == nil || to == nil || from == to {
+		return
+	}
+	a.pendingMoves = append(a.pendingMoves, tabMove{from: from, to: to})
+}
+
+// moveTab 把 from 放到 to 当前所在的位置。删除源后直接在目标的原下标
+// 插入：向右拖过目标落在目标右侧，向左拖过目标落在目标左侧（越过语义）。
+// active/lastActive 按 workspace 身份重新定位，保证选中的仍是同一个 tab。
+func (a *application) moveTab(fromWS, toWS *workspace) {
+	from := slices.Index(a.tabs, fromWS)
+	to := slices.Index(a.tabs, toWS)
+	if from < 0 || to < 0 || from == to {
+		return
+	}
+	activeWS, lastWS := a.activeTab(), a.tabAt(a.lastActive)
+	moved := a.tabs[from]
+	a.tabs = append(a.tabs[:from], a.tabs[from+1:]...)
+	a.tabs = slices.Insert(a.tabs, to, moved)
+	if activeWS != nil {
+		a.active = slices.Index(a.tabs, activeWS)
+	}
+	if lastWS != nil {
+		a.lastActive = slices.Index(a.tabs, lastWS)
+	}
+}
+
+// flushTabOps 应用本帧入队的 tab 增删与重排。关闭按降序执行：入队索引
+// 都是帧开始时的快照，先删大索引不会让小索引失效；重排按 workspace 身份
+// 落地，所以放在关闭/新建之后也不会错位。flush 后本帧剩余构建（内容区）
+// 读的是新 tab 集合；TabsBase 本帧仍按旧 n 建了 tab 元素，越界的 ids
+// 槽位为空、选中项由下一帧的 len 钳回，框架侧安全。
 func (a *application) flushTabOps() {
-	if len(a.pendingCloses) == 0 && !a.pendingNew {
+	if len(a.pendingCloses) == 0 && !a.pendingNew && len(a.pendingMoves) == 0 {
 		return
 	}
 	for i := len(a.pendingCloses) - 1; i >= 0; i-- {
@@ -332,6 +425,14 @@ func (a *application) flushTabOps() {
 	if a.pendingNew {
 		a.pendingNew = false
 		a.newTab()
+	}
+	if len(a.pendingMoves) > 0 {
+		for _, mv := range a.pendingMoves {
+			a.moveTab(mv.from, mv.to)
+		}
+		a.pendingMoves = a.pendingMoves[:0]
+		// 关闭/新建会经 tabChanged 落盘；只有移动时补一次
+		a.saveSession()
 	}
 }
 
@@ -370,28 +471,37 @@ func (a *application) syncTitle() {
 		return
 	}
 	title := "zhimareview"
-	if ws := a.activeTab(); ws != nil && ws.mode == "work" {
-		title = filepath.Base(ws.root)
+	if ws := a.activeTab(); ws != nil {
+		switch {
+		case ws.tabMeta.name != "":
+			title = ws.tabMeta.name
+		case ws.mode == "work":
+			title = filepath.Base(ws.root)
+		}
 	}
 	go a.win.SetTitle(title)
 }
 
-// sessionState 快照当前会话：work 态 tab 的根目录按序入列，pick 态不入；
-// 激活项换成过滤后列表里的下标（激活的是 pick tab 时为 -1，下次启动落在
-// 第一个项目）。纯读快照，供 saveSession 与测试使用。
+// sessionState 快照当前会话：work 态 tab 按序入列（含重命名/颜色），pick
+// 态不入；激活项换成过滤后列表里的下标（激活的是 pick tab 时为 -1，下次
+// 启动落在第一个项目）。纯读快照，供 saveSession 与测试使用。
 func (a *application) sessionState() store.Session {
-	var roots []string
+	var tabs []store.Tab
 	active := -1
 	for i, ws := range a.tabs {
 		if ws.mode != "work" {
 			continue
 		}
 		if i == a.active {
-			active = len(roots)
+			active = len(tabs)
 		}
-		roots = append(roots, ws.root)
+		tabs = append(tabs, store.Tab{
+			Root:  ws.root,
+			Name:  ws.tabMeta.name,
+			Color: ws.tabMeta.color,
+		})
 	}
-	return store.Session{Roots: roots, Active: active}
+	return store.Session{Tabs: tabs, Active: active}
 }
 
 // saveSession 把会话快照落盘（goroutine 写，不占主线程）。没有窗口
