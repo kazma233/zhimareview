@@ -85,6 +85,35 @@ func TestFindRepos(t *testing.T) {
 	}
 }
 
+// 空/损坏的 .git 不是仓库：git 会忽略它并解析到上层仓库，侧栏若按名字登记，
+// 会把上层仓库的同一批改动按子仓库再报一遍。无效条目不阻断下探。
+func TestFindReposIgnoresInvalidGitEntry(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	initRepo(t, root)
+	write(t, root+"/stale/file.txt", "x")
+	if err := os.MkdirAll(root+"/stale/.git", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root+"/junk/file.txt", "x")
+	write(t, root+"/junk/.git", "not a gitdir pointer\n")
+
+	repos := FindRepos(root)
+	if len(repos) != 1 || repos[0].Rel != "" {
+		t.Fatalf("repos = %+v, want only root repo", repos)
+	}
+
+	// 无效 .git 目录按普通目录下探：里面真正的子仓库仍然被发现
+	initRepo(t, root+"/stale/inner")
+	repos = FindRepos(root)
+	rels := make([]string, len(repos))
+	for i, r := range repos {
+		rels[i] = r.Rel
+	}
+	if len(rels) != 2 || rels[0] != "" || rels[1] != "stale/inner" {
+		t.Errorf("rels = %v, want [\"\" \"stale/inner\"]", rels)
+	}
+}
+
 func TestFindReposRootNotRepo(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	initRepo(t, root+"/only")
@@ -206,6 +235,28 @@ func TestCollectChanges(t *testing.T) {
 		if changes[i] != want[i] {
 			t.Errorf("changes[%d] = %+v, want %+v", i, changes[i], want[i])
 		}
+	}
+}
+
+// 上层仓库跟踪的文件 + 子目录里的空 .git（残留目录）：git 在子目录里解析到
+// 上层仓库，改动只能上报一次；修复前会多出一份 RepoRel="sub" 的副本。
+func TestCollectChangesIgnoresInvalidGitEntry(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	initRepo(t, root)
+	write(t, root+"/sub/file.txt", "base\n")
+	gitIn(t, root, "add", ".")
+	gitIn(t, root, "commit", "-m", "sub")
+	if err := os.MkdirAll(root+"/sub/.git", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, root+"/sub/file.txt", "mod\n")
+
+	changes := CollectChanges(FindRepos(root))
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want 1 duplicate-free entry", changes)
+	}
+	if c := changes[0]; c.RepoPath != root || c.RepoRel != "" || c.Path != "sub/file.txt" {
+		t.Errorf("change = %+v, want root repo sub/file.txt", c)
 	}
 }
 

@@ -50,29 +50,28 @@ func FindRepos(root string) []Repo {
 			}
 			return entries
 		})
+		// 有 .git 只是「可能」是仓库：空/损坏的 .git 目录会被 git 忽略、
+		// 向上解析到父仓库，仅凭名字登记会让父仓库的同一批改动按子仓库再报一遍。
+		// 交 git 自己判定（并发上限 8），无效条目按普通目录继续下探。
+		var candidates []int
+		for i, entries := range entriesPer {
+			for _, e := range entries {
+				if e.Name() == ".git" {
+					candidates = append(candidates, i)
+					break
+				}
+			}
+		}
+		isRepo := make([]bool, len(frontier))
+		for k, ok := range mapLimit(candidates, 8, func(i int) bool {
+			return isWorkTreeRoot(frontier[i].path)
+		}) {
+			isRepo[candidates[k]] = ok
+		}
 		next := make([]item, 0, len(frontier))
 		for i, it := range frontier {
 			entries := entriesPer[i]
-			// .git 目录是普通仓库；.git 文件是 worktree/子模块的 gitdir 指针，同样算仓库
-			hasGit := false
-			for _, e := range entries {
-				if e.Name() != ".git" {
-					continue
-				}
-				info, err := e.Info()
-				if err != nil {
-					continue
-				}
-				if info.IsDir() {
-					hasGit = true
-					break
-				}
-				if data, err := os.ReadFile(it.path + "/.git"); err == nil {
-					hasGit = strings.HasPrefix(string(data), "gitdir:")
-				}
-				break
-			}
-			if hasGit {
+			if isRepo[i] {
 				repos = append(repos, Repo{
 					Path: it.path,
 					Name: repoName(it),
@@ -99,6 +98,17 @@ func FindRepos(root string) []Repo {
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Rel < repos[j].Rel })
 	return repos
+}
+
+// isWorkTreeRoot 让 git 判定目录是不是工作树根：`--show-prefix` 为空表示
+// 当前目录就是工作树根，普通 .git 目录与 worktree/子模块的 .git 指针走同一
+// 判定；报错或前缀非空（目录其实位于上层仓库内部）都不算仓库。
+func isWorkTreeRoot(dir string) bool {
+	prefix, err := Run(dir, "rev-parse", "--show-prefix")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(prefix) == ""
 }
 
 // repoName 取目录名；根仓库（rel 为空）取路径末段，取不到（如盘根）退回完整路径
