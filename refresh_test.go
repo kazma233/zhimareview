@@ -89,7 +89,7 @@ func TestApplyScanStateSkipsUnchangedRebuild(t *testing.T) {
 	}
 
 	// 改动列表真变了（未跟踪 → 暂存新增）：重建并反映新状态
-	gitCmd(t, root, "add", "a.txt")
+	gitRun(t, root, "add", "a.txt")
 	ws.applyScanState(root, git.FindRepos(root), git.CollectChanges(repos))
 	if ws.changeByAbs[root+"/a.txt"] == p1 {
 		t.Fatal("derived index not rebuilt on changed scan")

@@ -1,7 +1,11 @@
 package main
 
 import (
+	"path/filepath"
+
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"zhimareview/internal/store"
 )
 
 // pickView 是入口选择态：选目录按钮 + 最近目录列表（有序、超出高度滚动）。
@@ -40,5 +44,62 @@ func (ws *workspace) pickView(c *ui.Context) {
 			})
 		}
 
+	})
+}
+
+// loadRecent 异步读取最近目录列表；读不到就保持空，入口页不显示该区块。
+// headless（post 未绑定）不读：测试直接注入 ws.recent。
+func (ws *workspace) loadRecent() {
+	if ws.post == nil {
+		return
+	}
+	loadAsync(ws, func() []string {
+		return store.LoadRecent(userDataDir())
+	}, func(recent []string) {
+		if len(recent) > 0 {
+			ws.recent = recent
+		}
+	})
+}
+
+// chooseDir 进入工作区：换根目录、写最近列表、重新扫描、会话跟随。
+// 只做状态变更与异步副作用，供 view 帧内和 Update 回调里调用——
+// 帧内同步调用窗口 API（hop 主线程队列）会死锁，见 syncTitle。
+func (ws *workspace) chooseDir(dir string) {
+	ws.root = dir
+	ws.mode = "work"
+	ws.clearErr()
+	ws.activeRepo = ""
+	ws.app.syncTitle()
+	ws.startWatch()
+	ws.rescan(dir)
+	ws.app.saveSession()
+
+	go func() {
+		if ws.app == nil {
+			// headless 测试没有窗口，持久化行为由 store 层单测覆盖
+			return
+		}
+		recent := store.RememberRecent(userDataDir(), dir)
+		ws.post(func() { ws.recent = recent })
+	}()
+}
+
+// browse 打开系统目录选择对话框；对话框同步阻塞，经管线离开主线程调用。
+func (ws *workspace) browse() {
+	loadAsync(ws, func() string {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Title:     "选择工作区根目录",
+			Directory: true,
+		})
+		if err != nil || len(paths) == 0 {
+			return ""
+		}
+		// 应用内路径统一 `/` 分隔：与 git 输出一致，避免两套分隔符比较失效。
+		return filepath.ToSlash(paths[0])
+	}, func(dir string) {
+		if dir != "" {
+			ws.chooseDir(dir)
+		}
 	})
 }

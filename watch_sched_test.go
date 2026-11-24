@@ -110,8 +110,8 @@ func TestHandleFsEventsReloadDiffKeepsState(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	gitInit(t, root)
 	write(t, root+"/changed.txt", "v1\n")
-	gitCmd(t, root, "add", ".")
-	gitCmd(t, root, "commit", "-m", "base")
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "base")
 	write(t, root+"/changed.txt", "v1\nv2\n")
 
 	ws := newWorkspace(nil)
@@ -148,8 +148,8 @@ func TestHandleFsEventsReloadDiffAppliesChange(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	gitInit(t, root)
 	write(t, root+"/changed.txt", "v1\n")
-	gitCmd(t, root, "add", ".")
-	gitCmd(t, root, "commit", "-m", "base")
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "base")
 	write(t, root+"/changed.txt", "v1\nv2\n")
 
 	ws := newWorkspace(nil)

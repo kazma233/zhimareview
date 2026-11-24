@@ -456,7 +456,7 @@ func TestFocusRefreshKeepsUnchangedHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v2\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitCmd(t, root, "commit", "-am", "second")
+	gitRun(t, root, "commit", "-am", "second")
 
 	ws := newWorkspace(nil)
 	ws.mode = "work"
@@ -493,7 +493,7 @@ func TestFocusRefreshKeepsUnchangedHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("v3\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitCmd(t, root, "commit", "-am", "third")
+	gitRun(t, root, "commit", "-am", "third")
 	ws.refresh()
 	if len(ws.hist.commits) != 3 || !hasSubject(ws.hist.commits, "third") {
 		t.Fatalf("commits after real change = %+v, want 3 with third", ws.hist.commits)
