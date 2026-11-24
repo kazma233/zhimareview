@@ -558,7 +558,7 @@ func TestRepoDropdownShowsBranchAndFilters(t *testing.T) {
 	}
 }
 
-// 复制 hash：详情头部按钮写入完整哈希。
+// 复制 hash：提交列表行右键写入完整哈希。
 func TestCopyCommitHash(t *testing.T) {
 	ws := newWorkspace(nil)
 	ws.mode = "work"
@@ -573,9 +573,13 @@ func TestCopyCommitHash(t *testing.T) {
 
 	tt := ui.NewTester(ws.view, 1180, 800)
 	tt.Frame()
-	if err := tt.Click("复制 hash"); err != nil {
+	if err := tt.RightClick("abcdef1"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.ChooseMenuItem("复制 hash"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	if got := tt.Clipboard(); got != "abcdef123456" {
 		t.Errorf("clipboard = %q, want full hash", got)
 	}

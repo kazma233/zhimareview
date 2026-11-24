@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/egoist/mygo/ui"
 	"zhimareview/internal/git"
 )
 
@@ -57,6 +58,9 @@ func fileID(c git.Change) string {
 type treeItem struct {
 	id    string
 	label string
+	// abs 是节点代表路径的绝对值：文件为 RepoPath/Path，目录为扫描根或
+	// 仓库根拼出的路径（跨仓库的虚拟目录层没有真实文件路径，仅供展示）
+	abs string
 	// rank 子孙最重的状态等级；0 表示无改动（空目录、干净仓库）
 	rank int
 	// letter 文件行的状态字母；目录行为空
@@ -98,8 +102,9 @@ func newTrieNode() *trieNode {
 
 // buildChangesTree 跨仓库聚合改动：仓库按 rel 折叠成目录层级，改动文件挂各自仓库下，
 // 没有改动的仓库也入树（空节点）。根仓库（rel 为空）不建目录层，由顶层单行承载。
+// scanRoot 是扫描根绝对路径，用于给目录节点拼绝对路径。
 // 返回顶层节点与 id → 节点索引（Outline 的 children 查找用）。
-func buildChangesTree(repos []git.Repo, changes []git.Change) ([]*treeItem, map[string]*treeItem) {
+func buildChangesTree(scanRoot string, repos []git.Repo, changes []git.Change) ([]*treeItem, map[string]*treeItem) {
 	root := newTrieNode()
 
 	// 先铺所有仓库，保证干净仓库也出现在树里
@@ -150,15 +155,20 @@ func buildChangesTree(repos []git.Repo, changes []git.Change) ([]*treeItem, map[
 	}
 
 	index := map[string]*treeItem{}
-	var build func(node *trieNode, dirPath string) *treeItem
-	build = func(node *trieNode, dirPath string) *treeItem {
-		item := &treeItem{}
+	var build func(node *trieNode, dirPath, abs string) *treeItem
+	build = func(node *trieNode, dirPath, abs string) *treeItem {
+		item := &treeItem{abs: abs}
 		for _, name := range sortedDirNames(node) {
 			childPath := name
 			if dirPath != "" {
 				childPath = dirPath + "/" + name
 			}
-			child := build(node.dirs[name], childPath)
+			childAbs := abs + "/" + name
+			// 仓库节点以仓库自身路径为准：rel 可能经过不属于任何仓库的虚拟层
+			if r := node.dirs[name].repo; r != nil {
+				childAbs = r.Path
+			}
+			child := build(node.dirs[name], childPath, childAbs)
 			child.label = name
 			// 仓库节点与普通目录节点分开标记，便于空仓库显示为普通文字
 			if r := node.dirs[name].repo; r != nil {
@@ -182,6 +192,7 @@ func buildChangesTree(repos []git.Repo, changes []git.Change) ([]*treeItem, map[
 			fi := &treeItem{
 				id:     fileID(file.change),
 				label:  file.name,
+				abs:    changeAbs(file.change),
 				rank:   rank,
 				letter: letter,
 				count:  1,
@@ -197,7 +208,7 @@ func buildChangesTree(repos []git.Repo, changes []git.Change) ([]*treeItem, map[
 		return item
 	}
 
-	tree := build(root, "")
+	tree := build(root, "", scanRoot)
 	for i := range tree.kids {
 		tree.kids[i] = compressDirChain(tree.kids[i])
 	}
@@ -206,6 +217,7 @@ func buildChangesTree(repos []git.Repo, changes []git.Change) ([]*treeItem, map[
 		item := &treeItem{
 			id:     id,
 			label:  root.repo.Name,
+			abs:    root.repo.Path,
 			isRepo: true,
 			rank:   tree.rank,
 			count:  tree.count,
@@ -229,6 +241,7 @@ func compressDirChain(it *treeItem) *treeItem {
 		kid := it.kids[0]
 		it.label = it.label + "/" + kid.label
 		it.id = kid.id
+		it.abs = kid.abs
 		it.kids = kid.kids
 	}
 	for i := range it.kids {
@@ -296,8 +309,8 @@ type changeTreePane struct {
 }
 
 // rebuild 按模型重建层级树与列表布局的全部派生（rebuildDerived 编排调用）。
-func (t *changeTreePane) rebuild(repos []git.Repo, changes []git.Change) {
-	t.roots, t.index = buildChangesTree(repos, changes)
+func (t *changeTreePane) rebuild(root string, repos []git.Repo, changes []git.Change) {
+	t.roots, t.index = buildChangesTree(root, repos, changes)
 	t.rebuildRows()
 	t.flat = sortChanges(changes)
 	t.flatRows = t.flatChangeRows(repos)
@@ -315,6 +328,8 @@ func (t *changeTreePane) rebuildRows() {
 			row := sideRow{
 				id:     it.id,
 				label:  it.label,
+				abs:    it.abs,
+				change: it.change,
 				depth:  depth,
 				branch: branch,
 				open:   branch && !t.collapsed[it.id],
@@ -359,9 +374,56 @@ func (t *changeTreePane) flatChangeRows(repos []git.Repo) []sideRow {
 		rows[i] = sideRow{
 			id:     fileID(ch),
 			label:  rel + "/" + ch.Path,
+			abs:    changeAbs(ch),
+			change: &t.flat[i],
 			letter: letter,
 			rank:   rank,
 		}
 	}
 	return rows
+}
+
+// baseName 取绝对路径最后一段（「复制名称」的目标）。
+func baseName(abs string) string {
+	if i := strings.LastIndex(abs, "/"); i >= 0 {
+		return abs[i+1:]
+	}
+	return abs
+}
+
+// rowMenu 是侧栏行的右键菜单：行携带的语义决定菜单项，三个列表共用。
+// 文件行（带 change）可暂存/取消暂存；目录/仓库行只在归属单一仓库且有
+// 改动时提供目录暂存——跨仓库的目录（仓库 rel 的虚拟父层、包含多个仓库
+// 的文件系统目录）没有可表达的 git 路径。abs 为空的行（搜索结果）没有菜单。
+func (ws *workspace) rowMenu(c *ui.Context, row sideRow) func(m *ui.Menu) {
+	if row.abs == "" {
+		return nil
+	}
+	return func(m *ui.Menu) {
+		if row.change != nil {
+			label := "暂存"
+			if row.change.Section == "staged" {
+				label = "取消暂存"
+			}
+			if m.Item(label).Chosen() {
+				ws.toggleStageFile(*row.change)
+			}
+		} else if row.branch && row.count > 0 {
+			if repo := ws.repoForAbs(row.abs); repo != "" {
+				label := "暂存目录"
+				if repo == row.abs {
+					label = "暂存仓库"
+				}
+				if m.Item(label).Chosen() {
+					ws.stageDir(row.abs)
+				}
+			}
+		}
+		if m.Item("复制路径").Chosen() {
+			c.WriteClipboard(row.abs)
+		}
+		if m.Item("复制名称").Chosen() {
+			c.WriteClipboard(baseName(row.abs))
+		}
+	}
 }

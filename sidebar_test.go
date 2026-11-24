@@ -24,7 +24,7 @@ func TestBuildChangesTree(t *testing.T) {
 		{RepoPath: "/r/group/a", RepoRel: "group/a", Path: "f.txt", Section: "staged", Code: "D"},
 	}
 
-	roots, index := buildChangesTree(repos, changes)
+	roots, index := buildChangesTree("/r", repos, changes)
 
 	// 根仓库存在：整棵树挂根仓库单行下
 	if len(roots) != 1 {
@@ -78,7 +78,7 @@ func TestBuildChangesTreeRenameGroupsByNewPath(t *testing.T) {
 		{RepoPath: "/r/reins", Path: "docs/AGENTS.md", OrigPath: "aidocs/AGENTS.md", Section: "staged", Code: "R"},
 		{RepoPath: "/r/reins", Path: "docs/Ref.md", OrigPath: "aidocs/Ref.md", Section: "staged", Code: "R"},
 	}
-	roots, index := buildChangesTree(repos, changes)
+	roots, index := buildChangesTree("/r", repos, changes)
 
 	var labels []string
 	var walk func(items []*treeItem)
@@ -112,7 +112,7 @@ func TestBuildChangesTreeStableOrder(t *testing.T) {
 		{RepoPath: "/r/x", RepoRel: "x", Path: "a/b.txt", Section: "untracked", Code: "?"},
 		{RepoPath: "/r/x", RepoRel: "x", Path: "a.txt", Section: "unstaged", Code: "M"},
 	}
-	roots, _ := buildChangesTree(repos, changes)
+	roots, _ := buildChangesTree("/r", repos, changes)
 	x := roots[0]
 	if len(x.kids) != 3 {
 		t.Fatalf("x kids = %d, want dir a + files a.txt/z.txt", len(x.kids))
@@ -175,7 +175,7 @@ func TestBuildChangesTreeCompressesDirChains(t *testing.T) {
 		// 嵌套仓库节点：不合并，保持仓库行
 		{RepoPath: "/r/wrap/nest", RepoRel: "nest", Path: "f.java", Section: "unstaged", Code: "M"},
 	}
-	roots, index := buildChangesTree(repos, changes)
+	roots, index := buildChangesTree("/r", repos, changes)
 
 	byLabel := map[string]*treeItem{}
 	for _, r := range roots[0].kids {

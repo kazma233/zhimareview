@@ -95,6 +95,9 @@ func (d *dirPane) rebuildRows(root string, changes []git.Change) {
 	if d.cache == nil {
 		d.cache = map[string][]fsEntry{}
 	}
+	// 文件行的暂存入口按「工作区侧优先」取改动，与 openFile 的「查看 diff」
+	// 同一索引规则（多分区同文件只留一份）
+	byAbs := buildChangeByAbs(changes)
 	// abs → 最重改动状态与数量（前缀匹配）
 	agg := map[string]*dirAgg{}
 	addAgg := func(dir string, rank int) {
@@ -122,7 +125,7 @@ func (d *dirPane) rebuildRows(root string, changes []git.Change) {
 	var walk func(abs string, depth int)
 	walk = func(abs string, depth int) {
 		for _, e := range d.cache[abs] {
-			row := sideRow{id: e.abs, label: e.name, depth: depth}
+			row := sideRow{id: e.abs, label: e.name, abs: e.abs, depth: depth}
 			if e.folder {
 				// 直接读值（不存在的 key 零值即 false）；不能写成 `_, open :=`
 				// ——那是存在性，收起后 key 仍在，open 恒为 true，永远收不起
@@ -139,6 +142,7 @@ func (d *dirPane) rebuildRows(root string, changes []git.Change) {
 				if a, ok := agg[e.abs]; ok {
 					row.rank = a.rank
 				}
+				row.change = byAbs[e.abs]
 				d.rows = append(d.rows, row)
 			}
 		}

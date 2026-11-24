@@ -45,9 +45,6 @@ func (ws *workspace) fileMainView(c *ui.Context) {
 			if ws.changeForAbs(v.abs) != nil {
 				ws.dirShowDiffCheckbox(c)
 			}
-			if ui.Button(c, "复制路径").Clicked() {
-				c.WriteClipboard(v.abs)
-			}
 		})
 		ui.Divider(c)
 

@@ -305,7 +305,8 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 		default:
 			rows := ws.dirs.rows
 			if row, ok := treeList(c, &ws.dirs.list, "dir-tree", rows, func(r ui.ListRow) {
-				sideRowView(r, rows[r.Index], func() { ws.toggleDir(rows[r.Index].id) })
+				sideRowView(r, rows[r.Index], func() { ws.toggleDir(rows[r.Index].id) },
+					ws.rowMenu(r.Context, rows[r.Index]))
 			}); ok {
 				if row.branch {
 					ws.toggleDir(row.id)
@@ -327,7 +328,7 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 	case ws.tree.layout:
 		rows := ws.tree.flatRows
 		if row, ok := treeList(c, &ws.tree.flatList, "flat-list", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() {})
+			sideRowView(r, rows[r.Index], func() {}, ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
 			// 列表布局全是叶子行；行 id 与树文件行同 id（fileID），
 			// 经 tree.index 取改动，不依赖 flat 下标与行集对齐
@@ -338,7 +339,8 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 	default:
 		rows := ws.tree.rows
 		if row, ok := treeList(c, &ws.tree.list, "changes-tree", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() { ws.toggleChange(rows[r.Index].id) })
+			sideRowView(r, rows[r.Index], func() { ws.toggleChange(rows[r.Index].id) },
+				ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
 			if row.branch {
 				ws.toggleChange(row.id)

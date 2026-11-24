@@ -45,8 +45,6 @@ type historyPane struct {
 	// files/diffs 是选中提交补丁的逐文件官方 diff 视图状态
 	files []editor.FilePatch
 	diffs []editor.DiffState
-	// selMerge 标记选中提交是否 merge（合并提交禁 revert）
-	selMerge bool
 	// gen 是列表加载世代：loadCommits 递增、追加页捕获，在途结果凭世代
 	// 落地——fetch/pull 后的重载不会被旧分页结果追加污染
 	gen int
@@ -329,7 +327,6 @@ func (ws *workspace) invalidateCommits() {
 	ws.hist.detailLoading = false
 	ws.hist.files = nil
 	ws.hist.diffs = nil
-	ws.hist.selMerge = false
 	ws.hist.loading = false
 	ws.hist.fetching = false
 	ws.hist.done = false
@@ -413,20 +410,18 @@ func (ws *workspace) loadCommitDetail(row git.CommitRow) {
 	repo := ws.activeRepo
 	loadAsync(ws, func() detailResult {
 		patch, err := git.CommitPatch(repo, row.Hash)
-		merge, merr := git.IsMergeCommit(repo, row.Hash)
-		return detailResult{patch: patch, err: err, merge: merr == nil && merge}
-	}, func(r detailResult) { ws.applyCommitDetail(repo, row, r.patch, r.err, r.merge) })
+		return detailResult{patch: patch, err: err}
+	}, func(r detailResult) { ws.applyCommitDetail(repo, row, r.patch, r.err) })
 }
 
 // detailResult 是提交补丁管线的加载结果。
 type detailResult struct {
 	patch string
 	err   error
-	merge bool
 }
 
 // applyCommitDetail 应用提交补丁；期间已切走或选择已变化时作废。
-func (ws *workspace) applyCommitDetail(repo string, row git.CommitRow, patch string, err error, merge bool) {
+func (ws *workspace) applyCommitDetail(repo string, row git.CommitRow, patch string, err error) {
 	if ws.mainTab != 1 || ws.activeRepo != repo {
 		return
 	}
@@ -440,7 +435,6 @@ func (ws *workspace) applyCommitDetail(repo string, row git.CommitRow, patch str
 	}
 	ws.hist.detailText = patch
 	ws.setCommitPatch(patch)
-	ws.hist.selMerge = merge
 }
 
 // setCommitPatch 把整份补丁解析为逐文件的 diff 视图状态。
@@ -474,12 +468,9 @@ func commitFileName(fp editor.FilePatch) string {
 	return name
 }
 
-// revertSelected 撤销选中的提交（合并提交禁用）。
-func (ws *workspace) revertSelected() {
-	if ws.hist.sel < 0 || ws.hist.sel >= len(ws.hist.commits) {
-		return
-	}
-	row := ws.hist.commits[ws.hist.sel]
+// revertCommit 撤销一个提交（列表行右键）。合并提交由菜单禁用，
+// 这里不再重复判定——CommitRow.Merge 是列表加载时算好的权威值。
+func (ws *workspace) revertCommit(row git.CommitRow) {
 	ws.runWrite(func() error {
 		return git.RevertCommit(ws.activeRepo, row.Hash)
 	}, "revert 失败", func() {

@@ -10,7 +10,8 @@ import (
 	"zhimareview/internal/git"
 )
 
-// 复制路径：diff 头部与文件查看头部都复制绝对路径。
+// 复制路径：diff 列表与目录列表的行右键都复制绝对路径；文件查看头部
+// 不再放复制按钮。
 func TestCopyFilePath(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	gitInit(t, root)
@@ -24,28 +25,42 @@ func TestCopyFilePath(t *testing.T) {
 	repos := git.FindRepos(root)
 	ws.applyScanState(root, repos, git.CollectChanges(repos))
 	change := ws.changes[0]
-	ws.openDiff(change)
-	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
 
 	tt := ui.NewTester(ws.view, 1180, 800)
 	tt.Frame()
-	if err := tt.Click("复制路径"); err != nil {
+	if err := tt.RightClick("base.txt"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.ChooseMenuItem("复制路径"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	if got, want := tt.Clipboard(), changeAbs(change); got != want {
-		t.Errorf("diff clipboard = %q, want %q", got, want)
+		t.Errorf("row clipboard = %q, want %q", got, want)
 	}
 
-	// 文件查看入口同样可复制
+	// 打开文件查看：头部没有复制按钮，复制入口在目录列表行右键
 	ws.openFile(root + "/base.txt")
 	waitFor(t, func() bool { return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "text" },
 		5*time.Second, "file not loaded")
 	tt.Frame()
-	if err := tt.Click("复制路径"); err != nil {
+	if tt.HasText("复制路径") {
+		t.Error("file header should not show a copy-path button")
+	}
+
+	ws.sidebarTab = "dir"
+	ws.dirs.cache = map[string][]fsEntry{root: readDirEntries(root)}
+	ws.dirs.rebuildRows(root, ws.changes)
+	tt.Frame()
+	if err := tt.RightClick("base.txt"); err != nil {
 		t.Fatal(err)
 	}
+	if err := tt.ChooseMenuItem("复制路径"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
 	if got, want := tt.Clipboard(), root+"/base.txt"; got != want {
-		t.Errorf("file clipboard = %q, want %q", got, want)
+		t.Errorf("dir row clipboard = %q, want %q", got, want)
 	}
 }
 

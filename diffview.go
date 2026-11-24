@@ -443,9 +443,13 @@ func (ws *workspace) renderHunkActions(c *ui.Context, bar ui.Element, a *editor.
 	})
 }
 
-// toggleStageFile 暂存/取消暂存一个文件（diff 头部与列表行共用）。
-// 不要求存在打开会话：完成后仅当仍是发起时的会话（世代未变）才翻转
-// 打开中的 diff。
+// sameChange 判断两个改动是否指向同一文件（分区不参与：翻转前后分区会变）。
+func sameChange(a, b git.Change) bool {
+	return a.RepoPath == b.RepoPath && a.Path == b.Path
+}
+
+// toggleStageFile 暂存/取消暂存一个文件（列表行右键）。不要求存在打开
+// 会话：完成后仅当打开中的正是该文件（世代未变）才翻转它。
 func (ws *workspace) toggleStageFile(v git.Change) {
 	seq := ws.diffv.seq
 	ws.runWrite(func() error {
@@ -454,9 +458,60 @@ func (ws *workspace) toggleStageFile(v git.Change) {
 		}
 		return git.StageFiles(v.RepoPath, []string{v.Path})
 	}, "暂存操作失败", func() {
-		// 打开中的 diff 跟着切到新分区（同一会话内），并刷新列表；
-		// 期间换开别的 diff（世代已变）则不再动新会话
-		if ws.diffv.open != nil && ws.diffv.seq == seq {
+		// 打开中的 diff 跟着切到新分区（同一会话、同一文件），并刷新列表；
+		// 期间换开别的 diff（世代已变）或打开的是别的文件时不动它
+		if ws.diffv.open != nil && ws.diffv.seq == seq && sameChange(*ws.diffv.open, v) {
+			ws.diffv.flip()
+			ws.reloadDiff()
+		}
+		ws.rescan(ws.root)
+	})
+}
+
+// stageDir 暂存一个目录下的全部改动。目录必须归属单一仓库（含仓库根）：
+// 跨仓库的目录（仓库 rel 的虚拟父层、包含多个仓库的文件系统目录）没有
+// 可表达的 git 路径，菜单不提供该动作。收集按 ws.changes 的仓库内前缀，
+// 不用 git add <dir>——项目允许根仓库内嵌子仓库，目录 add 会把未登记的子
+// 仓库当 gitlink 加进来。
+func (ws *workspace) stageDir(abs string) {
+	repo := ws.repoForAbs(abs)
+	if repo == "" {
+		return
+	}
+	prefix := abs + "/"
+	seen := map[string]bool{}
+	var paths []string
+	for i := range ws.changes {
+		c := &ws.changes[i]
+		if c.RepoPath != repo {
+			continue
+		}
+		ca := changeAbs(*c)
+		if ca != abs && !strings.HasPrefix(ca, prefix) {
+			continue
+		}
+		if seen[ca] {
+			continue
+		}
+		seen[ca] = true
+		paths = append(paths, c.Path)
+	}
+	if len(paths) == 0 {
+		return
+	}
+	// 打开中的 diff 在本次范围内且原本不在 staged 区：暂存后它只留在
+	// staged 区，会话内翻转并重读；不在范围内或已 staged 都不动它
+	seq := ws.diffv.seq
+	var open git.Change
+	flipOpen := false
+	if o := ws.diffv.open; o != nil && o.Section != "staged" {
+		open = *o
+		flipOpen = seen[changeAbs(open)]
+	}
+	ws.runWrite(func() error {
+		return git.StageFiles(repo, paths)
+	}, "暂存操作失败", func() {
+		if flipOpen && ws.diffv.seq == seq && ws.diffv.open != nil && sameChange(*ws.diffv.open, open) {
 			ws.diffv.flip()
 			ws.reloadDiff()
 		}
@@ -501,18 +556,6 @@ func (ws *workspace) diffView(c *ui.Context) {
 			if ws.diffv.sides != nil && !ws.diffv.sides.binary {
 				ws.expandToggle(c)
 			}
-			// git 操作组：暂存是写操作，与只读的浏览工具分开
-			ui.Divider(c)
-			label := "暂存"
-			if v.Section == "staged" {
-				label = "取消暂存"
-			}
-			if ui.Button(c, label).Clicked() {
-				ws.toggleStageFile(*v)
-			}
-			if ui.Button(c, "复制路径").Clicked() {
-				c.WriteClipboard(changeAbs(*v))
-			}
 		})
 
 		ui.Divider(c)
@@ -529,7 +572,7 @@ func (ws *workspace) diffView(c *ui.Context) {
 			} else {
 				ui.Column(c).Fill().Center().Gap(4).Children(func() {
 					ui.Text(c, "二进制文件").FontSize(tk.FontLG).FontWeight(600)
-					ui.Text(c, "无法以文本方式比较，可用头部按钮暂存或取消暂存").TextColor(tk.Muted).FontSize(tk.FontSM)
+					ui.Text(c, "无法以文本方式比较，可在侧栏列表右键暂存或取消暂存").TextColor(tk.Muted).FontSize(tk.FontSM)
 				})
 			}
 		case ws.mdPreview && ws.diffv.sides != nil:

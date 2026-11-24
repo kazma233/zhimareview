@@ -79,7 +79,7 @@ func (ws *workspace) applyScanState(dir string, found []git.Repo, changes []git.
 // 各纯输入派生函数。
 func (ws *workspace) rebuildDerived() {
 	ws.changeByAbs = buildChangeByAbs(ws.changes)
-	ws.tree.rebuild(ws.repos, ws.changes)
+	ws.tree.rebuild(ws.root, ws.repos, ws.changes)
 	ws.hist.rebuildOptions(ws.repos, ws.activeRepo)
 }
 

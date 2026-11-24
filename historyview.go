@@ -166,25 +166,13 @@ func (ws *workspace) historyView(c *ui.Context) {
 				ui.Row(c).FillWidth().Padding(8, 10).Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Column(c).Grow(1).Gap(2).Children(func() {
 						// ClipX 放弃 min-content 地板（坑 14 族）：长标题收缩截断，
-						// 不把右侧复制/revert 按钮挤出 pane
+						// 不把右侧布局切换挤出 pane
 						ui.Text(c, row.Subject).FontSize(tk.FontLG).FontWeight(600).SingleLine().ClipX()
 						ui.Textf(c, "%s · %s · %s", row.ShortHash, row.Author, row.Date).FontSize(tk.FontXS).TextColor(tk.Muted).SingleLine().ClipX()
 					})
 					// 布局分段与主 diff 共用偏好（逐文件小卡片默认吃统一
 					// 布局的窄幅优势）
 					layoutSwitch(c, ws)
-					if ui.Button(c, "复制 hash").Clicked() {
-						c.WriteClipboard(row.Hash)
-					}
-					// 文案固定：合并提交不可 revert 时置灰即可，理由放悬停
-					// 提示（文案随状态改会让按钮宽度跳变）
-					revertBtn := ui.Button(c, "revert").Disabled(ws.hist.selMerge)
-					if ws.hist.selMerge {
-						revertBtn = revertBtn.Tooltip("合并提交不可 revert")
-					}
-					if revertBtn.Clicked() {
-						ws.revertSelected()
-					}
 				})
 				ui.Divider(c)
 
@@ -260,7 +248,7 @@ func branchStatusParts(st git.BranchStatus) (branch, track string) {
 // 作者与日期钉在行尾。列宽与固定表头（commitListHeader）共用常量对齐。
 func (ws *workspace) commitRowView(c *ui.Context, row git.CommitRow) {
 	tk := appTokens(c)
-	ui.Row(c).FillWidth().Padding(4, 8).Gap(6).AlignItems(ui.Center).Children(func() {
+	line := ui.Row(c).FillWidth().Padding(4, 8).Gap(6).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, row.ShortHash).Font(monoFont()).FontSize(tk.FontSM).TextColor(tk.Accent).
 			Width(commitHashW).SingleLine().ClipX()
 		msg := ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -287,6 +275,19 @@ func (ws *workspace) commitRowView(c *ui.Context, row git.CommitRow) {
 			Width(commitAuthorW).SingleLine().ClipX()
 		ui.Text(c, row.Date).FontSize(tk.FontXS).TextColor(tk.Muted).
 			Width(commitDateW).SingleLine().ClipX()
+	})
+	line.ContextMenu(func(m *ui.Menu) {
+		if m.Item("复制 hash").Chosen() {
+			c.WriteClipboard(row.Hash)
+		}
+		// 合并提交不可 revert：置灰并说明原因，不依赖详情加载的旁路状态
+		rev := m.Item("revert").Disabled(row.Merge)
+		if row.Merge {
+			rev.Tooltip("合并提交不可 revert")
+		}
+		if rev.Chosen() {
+			ws.revertCommit(row)
+		}
 	})
 }
 

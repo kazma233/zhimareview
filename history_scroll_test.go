@@ -92,10 +92,11 @@ func TestHistoryPageLayout(t *testing.T) {
 	if !cbOK || cb.X+cb.W > 440 {
 		t.Fatalf("repo switcher rect=%+v ok=%v, want inside left pane (≤~420)", cb, cbOK)
 	}
-	// 右列 revert 按钮贴近页面顶端（顶栏 44 之下），diff 占满高度
-	rv, ok := tt.Find("revert")
-	if !ok || rv.Y > 44+32 {
-		t.Fatalf("revert button y=%.1f, want right pane starting at page top (≤76)", rv.Y)
+	// 右列详情头部贴近页面顶端（顶栏 44 之下），diff 占满高度：
+	// 元信息行（短哈希 · 作者 · 日期）只在右列出现
+	meta, ok := tt.Find("abc123d · alice · 2026-11-16")
+	if !ok || meta.Y > 44+32 {
+		t.Fatalf("detail header y=%.1f, want right pane starting at page top (≤76)", meta.Y)
 	}
 	// 固定表头：在远程操作行之下、列表首行之上
 	hd, ok := tt.Find("提交信息")

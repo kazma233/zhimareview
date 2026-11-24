@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
+	"zhimareview/internal/git"
 )
 
 // widgets 是应用内复用的界面模式。新组件先看这里有没有现成的。
@@ -10,8 +11,13 @@ import (
 // sideRow 是侧栏树（改动树与目录树）拍平后的通用渲染行。
 // 两棵树共用行类型与渲染；数据源不同，拍平各自做（rebuildChangeRows / rebuildDirRows）。
 type sideRow struct {
-	id     string // 展开态与选中跟随的身份：改动树是 cd:/cf: 前缀 id，目录树是 abs 路径
-	label  string // 显示名；列表布局是仓库相对完整路径
+	id    string // 展开态与选中跟随的身份：改动树是 cd:/cf: 前缀 id，目录树是 abs 路径
+	label string // 显示名；列表布局是仓库相对完整路径
+	// abs 是行代表对象的绝对路径（复制路径/名称的目标）；空串表示该行没有
+	// 行菜单（搜索结果行）
+	abs string
+	// change 非 nil 表示行代表一个带改动的文件：菜单提供暂存/取消暂存
+	change *git.Change
 	depth  int
 	branch bool // 可展开行（目录/仓库节点）；文件行为 false
 	open   bool
@@ -59,8 +65,8 @@ func treeList(c *ui.Context, l *selList, key string, rows []sideRow, render func
 // sideRowView 渲染侧栏树一行：缩进 + 箭头 + 字母列 + 名称 + 计数。
 // 选中高亮画在行上（ListRow.Selected）；branch 行的箭头是行内独立元素，
 // 点击只开合并吃掉该点击（不改变选中，Finder 披露三角语义），开合经 toggle
-// 回到调用方——行点击选中由 List 处理。
-func sideRowView(r ui.ListRow, row sideRow, toggle func()) {
+// 回到调用方——行点击选中由 List 处理。menu 为 nil 时不挂右键菜单。
+func sideRowView(r ui.ListRow, row sideRow, toggle func(), menu func(m *ui.Menu)) {
 	c := r.Context
 	tk := appTokens(c)
 	// 缩进是行首 spacer 而非行 padding：计数列才能固定贴右缘成对齐的一列
@@ -70,6 +76,9 @@ func sideRowView(r ui.ListRow, row sideRow, toggle func()) {
 	// 之前计数贴右缘会被压住，实抓），统一右 padding 计数列仍对齐
 	line := ui.Row(c).FillWidth().Height(tk.RowH).
 		Padding(0, 12, 0, 10).Gap(4).AlignItems(ui.Center).Radius(tk.RowRadius)
+	if menu != nil {
+		line.ContextMenu(menu)
+	}
 	if r.Selected() {
 		line.Background(tk.Selection)
 	}

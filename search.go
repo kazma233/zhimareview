@@ -464,7 +464,7 @@ func (ws *workspace) renderSearchResults(c *ui.Context) {
 			}
 		}
 		if row, ok := treeList(c, &ws.search.selList, "search-list", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() {})
+			sideRowView(r, rows[r.Index], func() {}, nil)
 		}); ok {
 			if row.branch {
 				// branch 点击：折叠/展开本树节点（treeList 已把选区归 -1）
