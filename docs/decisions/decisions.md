@@ -267,6 +267,19 @@
   `len(repos)` 个仓库 + `len(changes)` 处改动（按分区计，同一文件暂存/未暂存
   会重复计），扫描中替代计数，错误标题追加一行；pick 态给入口提示。
 
+- **全部 fetch 进度模态与通用弹窗（2026-11-24 二十一次决策）**：
+  `git.FetchReposProgress` 在每个仓库开始/结束时回调（后台串行），应用层经
+  `ws.post` 回主线程更新 `fetchAllPane`；最终 `applyResults` 用 `FetchRepos`
+  的返回值校准，防漏防重。模态展示总进度、逐仓库等待/fetch 中/完成/失败与
+  完整错误正文；失败不再另开错误弹窗，模态已关时回落 `setErr`。运行中再次
+  点顶栏「全部 fetch」只重开模态，不重复发起。模态归发起它的 tab（不提升到
+  窗口级）；模态在完成前被收起时失败仍回落错误弹窗，避免静默；正常完成时
+  错误只留模态，关闭即视为已读，不点未读红点。`dialog.go` 的 `showDialog`
+  统一标题/副标题、分隔线、正文与底部动作，`dialogCard` 统一正文滚动卡片
+  （Surface 底 + 内边距，右侧留 14px 给覆盖式滚动条）；`errDialog` 与
+  `fetchAllDialog` 共用。间距统一走 `tokens.Space(n)`，`SpaceUnit` 在
+  `appTokens` 归一（主题未设时 4 DIP）。
+
 ## 踩过的坑（后来者必读）
 
 1. **帧内同步调用窗口 API 死锁**：MyGo 窗口调用 hop 主线程队列，view 帧与

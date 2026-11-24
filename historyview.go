@@ -49,7 +49,7 @@ func (ws *workspace) historyView(c *ui.Context) {
 					// 仓库切换下拉放在历史页：activeRepo 决定历史读哪个仓库，
 					// 工作区的改动树是跨仓库聚合，切仓库在那里没有效果
 					ws.repoComboView(c, tk)
-					busy := ws.hist.remoteBusy != "" || ws.fetchingAll || ws.activeRepo == ""
+					busy := ws.hist.remoteBusy != "" || ws.fetchAll.running || ws.activeRepo == ""
 					// 文案不随状态改：进行中靠置灰表达（按钮文案会跳变，
 					// 读界面时按钮位置与宽度都在动）
 					if ui.Button(c, "fetch").Disabled(busy).Clicked() {

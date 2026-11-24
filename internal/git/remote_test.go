@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -178,5 +179,35 @@ func TestFetchRepos(t *testing.T) {
 	}
 	if results[2].Err == nil {
 		t.Error("bad remote fetch must fail")
+	}
+
+	// 进度回调：每个仓库恰好开始/结束一次，结束回调带回正确结果。
+	var mu sync.Mutex
+	started := map[string]int{}
+	done := map[string]bool{}
+	progress := FetchReposProgress(repos,
+		func(repo Repo) {
+			mu.Lock()
+			started[repo.Path]++
+			mu.Unlock()
+		},
+		func(res FetchResult) {
+			mu.Lock()
+			done[res.Repo.Path] = res.Err != nil
+			mu.Unlock()
+		})
+	if len(progress) != len(repos) {
+		t.Fatalf("progress results = %d, want %d", len(progress), len(repos))
+	}
+	if len(started) != len(repos) || len(done) != len(repos) {
+		t.Errorf("callbacks started=%d done=%d, want %d each", len(started), len(done), len(repos))
+	}
+	for _, repo := range repos {
+		if started[repo.Path] != 1 {
+			t.Errorf("started[%s] = %d, want 1", repo.Path, started[repo.Path])
+		}
+	}
+	if done[work] || done[plain] || !done[bad] {
+		t.Errorf("done errors = %v, want only bad failed", done)
 	}
 }

@@ -10,9 +10,10 @@ app.go               application 壳（单窗多 tab、tab 管理/会话恢复/�
 workspace.go         workspace 状态机（pick/work 两态）与顶栏/侧栏/主区路由、入场视图
 scan.go              扫描编排、派生重建、仓库/改动模型查询与按需刷新
 picker.go            选择态：最近目录 + 系统目录对话框 + 进入工作区
-remote.go            fetch/pull/全部 fetch 的编排与错误聚合
+remote.go            fetch/pull/全部 fetch 的编排、进度模态与错误聚合
 tabbar.go            自绘标题栏 tab 条（TabsBase + ×/＋ + 拖拽排序 + 颜色/重命名 + DragWindow）
 errdialog.go         错误弹窗：标题 + 可滚动正文 + 复制/关闭
+dialog.go            通用模态骨架：标题/副标题、分隔线、正文与底部动作、默认宽度与间距
 search.go            侧栏全局搜索（文件名/目录名/内容）
 sidebar.go           改动树构建（跨仓库折叠、状态色继承）与列表排序
 diffview.go          diff 视图接入（editor.DiffView + 落盘还原）与写操作编排
@@ -35,6 +36,8 @@ internal/store/      最近目录与会话 JSON 持久化（会话按 tab 记录
 - **挂载契约**：内容必须在 `Children` 闭包内创建，闭包外建的元素不会挂载。
 - **有状态控件**：Tabs / Segmented / Combobox / TextInput / Split / 两棵树构建前统一加 `c.Key`，否则重建后状态错乱。
 - **tab 重排与重命名**：重排在帧末 `flushTabOps` 按 `*workspace` 身份落地（关闭会改下标，索引快照不可复用）；重命名在标签内用 `TextInputBase`，失焦提交延迟 `tabRenameBlurDelay`——按下别的控件时释放还没到，立即收窄 tab 会让点击落空。
+- **全部 fetch 进度**：`git.FetchReposProgress` 在后台按仓库回调 start/done，回调经 `ws.post` 回主线程更新 `fetchAllPane`；`applyResults` 再用最终结果校准（防漏/防重）。模态关闭不取消后台 fetch；失败在模态内展示，模态已关时回落错误弹窗。
+- **通用模态**：`dialog.go` 的 `showDialog` 统一标题/副标题、分隔线、正文与底部动作；`dialogCard` 统一正文滚动卡片（Surface + 内边距，右侧留 14px 给覆盖式滚动条），错误弹窗与 fetch 进度模态共用。
 
 ## 参考文档
 

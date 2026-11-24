@@ -41,17 +41,28 @@ type tokens struct {
 	FontLG float32
 	FontXL float32
 
-	// 行度量：列表行高、行圆角、徽标圆角、每层缩进步长、状态字母列宽
+	// 行度量与间距：列表行高、行圆角、徽标圆角、每层缩进步长、状态字母列宽、
+	// 间距单位（Space(n) 按它缩放）
 	RowH        float32
 	RowRadius   float32
 	BadgeRadius float32
 	Indent      float32
 	LetterW     float32
+	SpaceUnit   float32
+}
+
+// Space 是应用层间距刻度：n 个主题间距单位（appTokens 归一为至少 4 DIP）。
+func (tk tokens) Space(n float32) float32 {
+	return n * tk.SpaceUnit
 }
 
 // appTokens 每帧派生一次令牌；视图开头 tk := appTokens(c)。
 func appTokens(c *ui.Context) tokens {
 	t := c.Theme()
+	space := t.Spacing
+	if space <= 0 {
+		space = 4
+	}
 	return tokens{
 		Accent:       t.Accent,
 		AccentText:   t.AccentText,
@@ -76,8 +87,9 @@ func appTokens(c *ui.Context) tokens {
 		RowRadius:    6,
 		BadgeRadius:  4,
 		// 目录树原为 14、改动树为 12，两个值没有语义差异，收敛为一档
-		Indent:  12,
-		LetterW: 14,
+		Indent:    12,
+		LetterW:   14,
+		SpaceUnit: space,
 	}
 }
 

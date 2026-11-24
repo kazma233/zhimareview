@@ -61,9 +61,9 @@ type workspace struct {
 	// lastRefresh 是上次重扫时间：切 tab / 窗口获得焦点的重扫按它节流
 	lastRefresh time.Time
 	scanning    bool
-	// fetchingAll 是顶栏「全部 fetch」在途标记：与单仓库 fetch/pull 互斥，
-	// 避免同一仓库的并发 git 写操作
-	fetchingAll bool
+	// fetchAll 是顶栏「全部 fetch」的在途状态与进度模态：running 与单仓库
+	// fetch/pull 互斥，避免同一仓库的并发 git 写操作；展示细节见 remote.go
+	fetchAll fetchAllPane
 
 	// 扫描模型：全工作区共享的数据；两条生产者写入（rescan 全量、watch 增量合并）
 	repos   []git.Repo
@@ -156,10 +156,9 @@ func (ws *workspace) workView(c *ui.Context) {
 			ui.Text(c, stats).FontSize(tk.FontSM).TextColor(tk.Muted)
 			ui.Spacer(c)
 			ui.Tabs(c.Key("main-tab"), &ws.mainTab, "工作区", "提交历史")
-			// 文案不随状态改：进行中靠置灰表达（按钮文案会跳变，读界面时
-			// 按钮位置与宽度都在动）
+			// 文案不随状态改；运行中点击重新打开进度模态，不重复发起 fetch
 			if ui.Button(c, "全部 fetch").
-				Disabled(ws.fetchingAll || ws.hist.remoteBusy != "" || len(ws.repos) == 0).
+				Disabled(ws.hist.remoteBusy != "" || len(ws.repos) == 0).
 				Clicked() {
 				ws.fetchAllRepos()
 			}

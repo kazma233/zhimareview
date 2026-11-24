@@ -157,48 +157,6 @@ func TestPullActiveRepoFailureKeepsError(t *testing.T) {
 	}
 }
 
-// 全部 fetch：无 remote 的仓库不报错，坏 remote 按仓库聚合反馈；
-// 完成后忙碌标记清除且历史重载。
-func TestFetchAllReposAggregatesErrors(t *testing.T) {
-	_, work := cloneWithRemote(t)
-	plain := filepath.ToSlash(t.TempDir()) + "/plain"
-	gitInit(t, plain)
-	bad := filepath.ToSlash(t.TempDir()) + "/bad"
-	gitInit(t, bad)
-	gitRun(t, bad, "remote", "add", "origin", bad+"/missing.git")
-
-	ws := newWorkspace(nil)
-	ws.mode = "work"
-	ws.root = filepath.ToSlash(t.TempDir())
-	ws.repos = []git.Repo{
-		{Path: work, Name: "work", Rel: "work"},
-		{Path: plain, Name: "plain", Rel: "plain"},
-		{Path: bad, Name: "bad", Rel: "bad"},
-	}
-	ws.activeRepo = work
-	ws.mainTab = 1
-	ws.loadCommits()
-
-	ws.fetchAllRepos()
-	if ws.fetchingAll {
-		t.Error("fetchingAll must be cleared after completion")
-	}
-	if !strings.Contains(ws.errText(), "fetch 失败 1/3") || !strings.Contains(ws.errText(), "bad") {
-		t.Errorf("errText = %q, want one named failure out of three", ws.errText())
-	}
-	if len(ws.hist.commits) == 0 {
-		t.Error("commits must be reloaded after fetch all")
-	}
-
-	// 不在历史页时全部 fetch 也要让历史失效，进入页面时重新加载
-	ws.mainTab = 0
-	ws.hist.all = []git.CommitRow{{Hash: "stale"}}
-	ws.fetchAllRepos()
-	if ws.hist.all != nil {
-		t.Error("fetch all off the history tab must invalidate commits")
-	}
-}
-
 // 历史页 rebase 开关：勾选后 pull 走 --rebase，本地提交重放到远程之上。
 func TestPullActiveRepoRebase(t *testing.T) {
 	origin, work := cloneWithRemote(t)

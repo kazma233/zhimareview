@@ -322,9 +322,10 @@ func (a *application) view(c *ui.Context) {
 				ws.view(c)
 			}
 		})
-		// 错误弹窗盖在整窗之上：错误归产生它的 tab，切到该 tab 时才弹
+		// 错误弹窗与 fetch 进度模态盖在整窗之上，都归产生它的 tab
 		if ws := a.activeTab(); ws != nil {
 			errDialog(c, ws)
+			fetchAllDialog(c, ws)
 		}
 	})
 }

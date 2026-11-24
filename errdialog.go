@@ -1,10 +1,6 @@
 package main
 
-import (
-	"strings"
-
-	"github.com/egoist/mygo/ui"
-)
+import "github.com/egoist/mygo/ui"
 
 // errInfo 是错误弹窗的内容：title 是短分类（"pull 失败"），body 是原始
 // 细节（git 的多行提示原样保留）。两者分开：标题给对话框，正文给复制。
@@ -20,6 +16,14 @@ func (ws *workspace) setErr(title, body string) {
 	ws.errOpen = true
 	// 未读：tab 上的红点标记着它，等用户看过弹窗才消失
 	ws.errSeen = false
+}
+
+// recordErr 记录错误但不弹窗、不点未读红点：错误已由产生它的界面（fetch
+// 进度模态）展示，关闭模态即视为已读；内容仍留给 tab 悬停提示。
+func (ws *workspace) recordErr(title, body string) {
+	ws.err = &errInfo{title: title, body: body}
+	ws.errOpen = false
+	ws.errSeen = true
 }
 
 // clearErr 清掉错误（成功路径）：内容与弹窗一起消失。
@@ -48,7 +52,7 @@ func (ws *workspace) errText() string {
 }
 
 // errDialog 是错误弹窗：标题 + 可滚动的等宽正文 + 复制/关闭按钮。
-// 覆盖在整窗之上（Modal 的背景铺满窗口），正文超长时内部滚动。
+// 骨架走通用 showDialog；正文放在带内边距的卡片里，滚动条不压文字。
 func errDialog(c *ui.Context, ws *workspace) {
 	if ws.err == nil {
 		return
@@ -59,33 +63,32 @@ func errDialog(c *ui.Context, ws *workspace) {
 		return
 	}
 	tk := appTokens(c)
-	ui.Modal(c, &ws.errOpen, func() {
-		ui.Column(c).Width(560).Gap(10).Children(func() {
-			ui.Text(c, ws.err.title).Bold().FontSize(tk.FontLG).TextColor(tk.Danger)
+	showDialog(c, &ws.errOpen, dialogOptions{
+		title: ws.err.title,
+		tone:  tk.Danger,
+		body: func() {
 			// 正文：逐行渲染（保留 git 提示的换行与缩进），超长在框内滚动
-			ui.Scroll(c.Key("err-body")).MaxHeight(320).Children(func() {
+			dialogCard(c, "err-body", 320, func() {
 				ui.Column(c).FillWidth().Gap(2).Children(func() {
-					for _, line := range strings.Split(ws.err.body, "\n") {
-						ui.Text(c, line).Font(monoFont()).FontSize(tk.FontMD).FillWidth()
-					}
+					dialogMonoLines(c, ws.err.body, tk.FontMD, tk.Text)
 				})
 			})
-			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "复制").Clicked() {
-					// 写入结果异步回来（系统剪贴板可能被别的应用占用），
-					// 用 Toast 反馈成败
-					c.WriteClipboardThen(ws.errText(), func(err error) {
-						if err != nil {
-							c.Toast("复制失败")
-						} else {
-							c.Toast("已复制错误信息")
-						}
-					})
-				}
-				if ui.PrimaryButton(c, "关闭").Clicked() {
-					ws.closeErr()
-				}
-			})
-		})
+		},
+		actions: func() {
+			if ui.Button(c, "复制").Clicked() {
+				// 写入结果异步回来（系统剪贴板可能被别的应用占用），
+				// 用 Toast 反馈成败
+				c.WriteClipboardThen(ws.errText(), func(err error) {
+					if err != nil {
+						c.Toast("复制失败")
+					} else {
+						c.Toast("已复制错误信息")
+					}
+				})
+			}
+			if ui.PrimaryButton(c, "关闭").Clicked() {
+				ws.closeErr()
+			}
+		},
 	})
 }

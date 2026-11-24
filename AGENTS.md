@@ -19,7 +19,7 @@ zhimareview：MyGo（Go 原生 UI，GPU 绘制）单窗口多 tab git 查看工�
 - **git 写操作**走进程内写互斥 + `index.lock` 撞锁退避重试，不绕过互斥另起写进程。
 - **渲染组件只用官方**：diff/代码查看/Markdown 用 `ui/editor`、`ui/markdown`，不自研；定制点仅「还原此块」（按 hunk 行号落盘）。
 - **不做提交功能**：diff 头部只做暂存/取消暂存，提交由外部工具完成。
-- **视觉令牌**统一走 `theme.go` 的 `tokens`，错误统一走 `errdialog.go` 模态弹窗。
+- **视觉令牌**统一走 `theme.go` 的 `tokens`；普通错误走 `errdialog.go` 模态弹窗，全部 fetch 的失败在 fetch 进度模态内展示（模态已关时回落错误弹窗）。
 - **框架口径**：MyGo 以 go.mod 固定版本 + `go doc` 为准；GitHub main 分支文档可能领先已发布版本，不按未发布文档写代码。
 - 显式偏差（heic 不支持、pull 默认 `--ff-only` 等，见 README）是有意为之，不是待修 bug。
 
