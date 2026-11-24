@@ -280,6 +280,14 @@
   `fetchAllDialog` 共用。间距统一走 `tokens.Space(n)`，`SpaceUnit` 在
   `appTokens` 归一（主题未设时 4 DIP）。
 
+- **diff 列表按分区组连续排列（2026-11-24 二十二次决策）**：侧栏改动列表拆成
+  「已暂存 / 未暂存」两组，组标题行可折叠并显示计数，组内保持现有层级树或
+  平铺布局；untracked 归未暂存。空组不显示标题。干净仓库不再作为空节点出现：
+  两组各铺一份会重复，仓库总数由顶栏统计与 tab 悬停承担。行身份随组带分区
+  （目录 `cd:<section>:<rel>`、仓库 `cd-repo:<section>:<abs>`，文件 id 原本含
+  section），List 的 Key 保持唯一，两组的目录折叠独立；组折叠状态
+  `groupCollapsed` 缺省展开、独立于目录收起集。
+
 ## 踩过的坑（后来者必读）
 
 1. **帧内同步调用窗口 API 死锁**：MyGo 窗口调用 hop 主线程队列，view 帧与

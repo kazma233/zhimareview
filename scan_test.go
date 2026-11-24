@@ -23,8 +23,12 @@ func TestApplyScanState(t *testing.T) {
 	if ws.activeRepo != "D:/repos/clean" {
 		t.Errorf("activeRepo = %q, want the repo with changes", ws.activeRepo)
 	}
-	if len(ws.tree.roots) != 2 || ws.tree.flat == nil || len(ws.hist.repoOptions) != 2 {
-		t.Errorf("derived data not rebuilt: roots=%d options=%d", len(ws.tree.roots), len(ws.hist.repoOptions))
+	// 只有有改动的仓库进入对应分组；干净仓库不再作为空节点显示
+	if len(ws.tree.groups[0].roots) != 0 || len(ws.tree.groups[1].roots) != 1 ||
+		len(ws.tree.flatRows) != 2 || len(ws.hist.repoOptions) != 2 {
+		t.Errorf("derived data not rebuilt: roots=%d/%d flatRows=%d options=%d",
+			len(ws.tree.groups[0].roots), len(ws.tree.groups[1].roots),
+			len(ws.tree.flatRows), len(ws.hist.repoOptions))
 	}
 	// 扫描期间换目录：过期结果作废
 	ws.root = "D:/other"

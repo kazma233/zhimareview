@@ -28,13 +28,14 @@ func TestSidebarFolderIconPainted(t *testing.T) {
 	}
 	ws.applyScanState("D:/repos", repos, changes)
 	// 默认全展开；显式收起第一行，得到开/合两态
-	ws.toggleChange(repoID("D:/repos/a"))
+	ws.toggleChange(repoID("unstaged", "D:/repos/a"))
 
 	tt := ui.NewTester(ws.view, 300, 800)
 	tt.Frame()
 	img := tt.Image()
 
-	// depth0 两行：图标盒在行首 x 4..18，行高 24 内垂直居中 y+5..y+19
+	// 分组后顶部多一行「未暂存」组标题（行高 24）；depth0 两行依次下移：
+	// 图标盒在行首 x 4..18，行高 24 内垂直居中 y+5..y+19
 	iconPixels := func(rowY int) map[uint32]int {
 		set := map[uint32]int{}
 		for py := rowY + 5; py < rowY+19; py++ {
@@ -45,8 +46,8 @@ func TestSidebarFolderIconPainted(t *testing.T) {
 		}
 		return set
 	}
-	closed := iconPixels(76)
-	open := iconPixels(100)
+	closed := iconPixels(106)
+	open := iconPixels(130)
 	if len(closed) < 3 || len(open) < 3 {
 		t.Errorf("icon not painted: closed colors=%d open colors=%d", len(closed), len(open))
 	}
@@ -119,7 +120,7 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 	}
 	// 全展开：无文件的单链目录合并为一行 chain/a1/a2（label 路径、id 取最深层），
 	// 行 open，文件行直接入行
-	chain, ok := rows["cd:chain/a1/a2"]
+	chain, ok := rows[dirID("unstaged", "chain/a1/a2")]
 	if !ok {
 		t.Fatalf("compressed chain row missing: %v rows", len(ws.tree.rows))
 	}
@@ -129,7 +130,7 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 	if !chain.open {
 		t.Error("compressed chain not expanded by default")
 	}
-	if r := rows["cd:flat"]; !r.open {
+	if r := rows[dirID("unstaged", "flat")]; !r.open {
 		t.Error("flat dir not expanded by default")
 	}
 	if _, ok := rows["cf:D:/repos/t|chain/a1/a2/deep.java|unstaged"]; !ok {
@@ -137,12 +138,12 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 	}
 
 	// 收起合并行：其子树消失，其余目录保持展开
-	ws.toggleChange("cd:chain/a1/a2")
+	ws.toggleChange(dirID("unstaged", "chain/a1/a2"))
 	rows = map[string]sideRow{}
 	for _, r := range ws.tree.rows {
 		rows[r.id] = r
 	}
-	if r := rows["cd:chain/a1/a2"]; r.open {
+	if r := rows[dirID("unstaged", "chain/a1/a2")]; r.open {
 		t.Error("collapsed chain still open")
 	}
 	for _, gone := range []string{"cf:D:/repos/t|chain/a1/a2/deep.java|unstaged"} {
@@ -150,7 +151,7 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 			t.Errorf("row %q should disappear under collapsed chain", gone)
 		}
 	}
-	if r := rows["cd:flat"]; !r.open {
+	if r := rows[dirID("unstaged", "flat")]; !r.open {
 		t.Error("unrelated dir must stay expanded")
 	}
 
@@ -160,7 +161,7 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 	for _, r := range ws.tree.rows {
 		rows[r.id] = r
 	}
-	if r := rows["cd:chain/a1/a2"]; r.open {
+	if r := rows[dirID("unstaged", "chain/a1/a2")]; r.open {
 		t.Error("explicit collapse must survive rescan")
 	}
 	if _, ok := rows["cf:D:/repos/t|flat/direct.java|unstaged"]; !ok {
@@ -168,12 +169,12 @@ func TestChangesTreeDefaultExpanded(t *testing.T) {
 	}
 
 	// 再点合并行：回到缺省展开
-	ws.toggleChange("cd:chain/a1/a2")
+	ws.toggleChange(dirID("unstaged", "chain/a1/a2"))
 	rows = map[string]sideRow{}
 	for _, r := range ws.tree.rows {
 		rows[r.id] = r
 	}
-	if r := rows["cd:chain/a1/a2"]; !r.open {
+	if r := rows[dirID("unstaged", "chain/a1/a2")]; !r.open {
 		t.Error("re-toggle must restore default expanded")
 	}
 }

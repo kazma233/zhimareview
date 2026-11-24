@@ -27,7 +27,7 @@ func TestChangesTreeToggle(t *testing.T) {
 	if len(ws.changes) != 1 {
 		t.Fatalf("changes = %d, want 1", len(ws.changes))
 	}
-	rootLabel := ws.tree.roots[0].label
+	rootLabel := ws.tree.groups[1].roots[0].label
 
 	tt := ui.NewTester(ws.view, 300, 600)
 	tt.Frame()
@@ -99,7 +99,17 @@ func TestFlatListClickOpensDiff(t *testing.T) {
 	if len(ws.tree.flatRows) == 0 {
 		t.Fatal("no flat rows")
 	}
-	leaf := ws.tree.flatRows[0].label
+	// 第一行是组标题，文件行取首个非标题行
+	leaf := ""
+	for _, r := range ws.tree.flatRows {
+		if !r.header {
+			leaf = r.label
+			break
+		}
+	}
+	if leaf == "" {
+		t.Fatal("no flat file row")
+	}
 
 	tt := ui.NewTester(ws.view, 300, 600)
 	tt.Frame()

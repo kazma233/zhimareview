@@ -20,6 +20,8 @@ type sideRow struct {
 	change *git.Change
 	depth  int
 	branch bool // 可展开行（目录/仓库节点）；文件行为 false
+	// header 是分区组标题行（已暂存/未暂存）：点击折叠整组，没有右键菜单
+	header bool
 	open   bool
 	// nameHit 是搜索结果树里「目录名含搜索词」：行文字保持主色（否则
 	// 空子层的 branch 行会被当空目录弱化成灰色）
@@ -56,7 +58,7 @@ func treeList(c *ui.Context, l *selList, key string, rows []sideRow, render func
 		return sideRow{}, false
 	}
 	row := rows[l.sel]
-	if row.branch {
+	if row.branch || row.header {
 		l.sel = -1
 	}
 	return row, true
@@ -81,6 +83,10 @@ func sideRowView(r ui.ListRow, row sideRow, toggle func(), menu func(m *ui.Menu)
 	}
 	if r.Selected() {
 		line.Background(tk.Selection)
+	} else if row.header {
+		// 组标题用底色与文件行区分，行高与左右边距保持一致，两个分组在
+		// 视觉上连成一条列表而不是两张卡片
+		line.Background(tk.Surface)
 	}
 	// 目录行不着状态色（改动状态看文件行的字母与文件名）；空目录/空仓库
 	// 弱化显示；文件行带改动才着色
@@ -92,6 +98,25 @@ func sideRowView(r ui.ListRow, row sideRow, toggle func(), menu func(m *ui.Menu)
 		color = tk.rankColor(row.rank)
 	}
 	line.Children(func() {
+		if row.header {
+			// 组标题：折叠箭头 + 组名 + 改动数。箭头矢量自绘（▾/▸ 文本
+			// 在 XS 字号下太小，实抓），盒子与目录图标列同宽保持对齐
+			caret := ui.Box(c).Size(tk.LetterW, tk.LetterW).Shrink(0)
+			caret.Draw(func(p *ui.Painter, r ui.Rect) {
+				cx, cy, d := r.X+r.W/2, r.Y+r.H/2, float32(5)
+				var path ui.Path
+				if row.open {
+					path.MoveTo(cx-d, cy-d/2).LineTo(cx, cy+d/2).LineTo(cx+d, cy-d/2)
+				} else {
+					path.MoveTo(cx-d/2, cy-d).LineTo(cx+d/2, cy).LineTo(cx-d/2, cy+d)
+				}
+				p.StrokePath(&path, 2, tk.Muted)
+			})
+			ui.Text(c, row.label).FontSize(tk.FontSM).FontWeight(600).TextColor(tk.Muted).
+				Grow(1).SingleLine().ClipX()
+			ui.Textf(c, "%d", row.count).FontSize(tk.FontXS).TextColor(tk.Muted)
+			return
+		}
 		if row.depth > 0 {
 			ui.Box(c).Width(float32(row.depth) * tk.Indent).Shrink(0)
 		}

@@ -283,7 +283,9 @@ func (ws *workspace) sidebarView(c *ui.Context) {
 		// 占「剩余高度」用 Grow 而非 Fill（Fill=父容器 100%，叠加分段行后基数
 		// 超限、min-content 不许收缩，列底越出窗口——List 视口高度失真到无
 		// 滚动余量）
-		ui.Column(c).FillWidth().Grow(1).Children(func() {
+		// 顶部留 6px 与分段行分开：组标题有底色，贴住按钮行会把分段组
+		// 的下边框视觉上盖掉（实抓）
+		ui.Column(c).FillWidth().Grow(1).Padding(tk.Space(1.5), 0, 0, 0).Children(func() {
 			// 搜索接管内容区：结果列表替代 diff 列表 / 目录列表
 			if ws.searching() {
 				ws.renderSearchResults(c)
@@ -330,9 +332,11 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 		if row, ok := treeList(c, &ws.tree.flatList, "flat-list", rows, func(r ui.ListRow) {
 			sideRowView(r, rows[r.Index], func() {}, ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
-			// 列表布局全是叶子行；行 id 与树文件行同 id（fileID），
+			// 列表布局只有组标题与叶子行；文件行 id 与树文件行同 id（fileID），
 			// 经 tree.index 取改动，不依赖 flat 下标与行集对齐
-			if item := ws.tree.index[row.id]; item != nil && item.change != nil {
+			if row.header {
+				ws.toggleGroup(row.id)
+			} else if item := ws.tree.index[row.id]; item != nil && item.change != nil {
 				ws.openDiff(*item.change)
 			}
 		}
@@ -342,10 +346,15 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 			sideRowView(r, rows[r.Index], func() { ws.toggleChange(rows[r.Index].id) },
 				ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
-			if row.branch {
+			switch {
+			case row.header:
+				ws.toggleGroup(row.id)
+			case row.branch:
 				ws.toggleChange(row.id)
-			} else if item := ws.tree.index[row.id]; item != nil && item.change != nil {
-				ws.openDiff(*item.change)
+			default:
+				if item := ws.tree.index[row.id]; item != nil && item.change != nil {
+					ws.openDiff(*item.change)
+				}
 			}
 		}
 	}

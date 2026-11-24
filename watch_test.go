@@ -150,10 +150,10 @@ func TestHandleFsEventsCollectMerge(t *testing.T) {
 	if len(ws.changes) != 0 {
 		t.Fatalf("changes = %d after full-flush event, want merged to 0", len(ws.changes))
 	}
-	// 派生行同步重建：文件行清空，只剩空仓库的普通文字行（branch、无状态字母、计数 0）
-	if len(ws.tree.rows) != 1 || !ws.tree.rows[0].branch ||
-		ws.tree.rows[0].letter != "" || ws.tree.rows[0].count != 0 {
-		t.Errorf("changeRows = %+v, want only the empty-repo plain row", ws.tree.rows)
+	// 派生行同步重建：两组都空，干净仓库不再作为空节点出现
+	if len(ws.tree.rows) != 0 || len(ws.tree.flatRows) != 0 {
+		t.Errorf("changeRows = %+v flatRows = %+v, want empty (clean repos are not listed)",
+			ws.tree.rows, ws.tree.flatRows)
 	}
 }
 

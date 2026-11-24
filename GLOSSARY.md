@@ -13,5 +13,5 @@ _Avoid_: 窗口、多开
 _Avoid_: 异步任务、后台加载、goroutine 调用
 
 **行身份**:
-改动树一行（目录/仓库/文件）的持久身份字符串，语法单点在 dirID/repoID/fileID：目录 `cd:<rel>`、仓库 `cd-repo:<abs>`、文件 `cf:<repo>|<path>|<section>`；收起集与选区跟随按它索引，跨扫描保持。目录树行身份直接用文件绝对路径，无前缀语法。
+改动树一行（目录/仓库/文件）的持久身份字符串，语法单点在 dirID/repoID/fileID：目录 `cd:<section>:<rel>`、仓库 `cd-repo:<section>:<abs>`、文件 `cf:<repo>|<path>|<section>`；收起集与选区跟随按它索引，跨扫描保持。同一目录/仓库在两个分区组里各有一行，id 带分区保证唯一、两组折叠独立。目录树行身份直接用文件绝对路径，无前缀语法。
 _Avoid_: 行 key、节点编号

@@ -43,15 +43,43 @@ func statusRank(code, section string) (letter string, rank int) {
 	}
 }
 
-// dirID/repoID/fileID 是改动树行身份的语法单点：目录 cd:<rel>、仓库
-// cd-repo:<abs>、文件 cf:<repo>|<path>|<section>。收起集（tree.collapsed）
-// 与选区跟随按它索引，跨扫描保持；列表布局行与树文件行同 id（fileID）。
-// 目录树行身份是文件绝对路径，无前缀语法。
-func dirID(rel string) string  { return "cd:" + rel }
-func repoID(abs string) string { return "cd-repo:" + abs }
+// dirID/repoID/fileID 是改动树行身份的语法单点：目录 cd:<section>:<rel>、
+// 仓库 cd-repo:<section>:<abs>、文件 cf:<repo>|<path>|<section>。分组后
+// 同一目录/仓库在两个分区组里各有一行，id 带分区保证 List 的 Key 唯一；
+// 收起集（tree.collapsed）按 id 索引，跨扫描保持，分组内独立开合。
+// section 为空（无分组构建，测试用）时保持旧语法。
+func dirID(section, rel string) string {
+	if section == "" {
+		return "cd:" + rel
+	}
+	return "cd:" + section + ":" + rel
+}
+
+func repoID(section, abs string) string {
+	if section == "" {
+		return "cd-repo:" + abs
+	}
+	return "cd-repo:" + section + ":" + abs
+}
 
 func fileID(c git.Change) string {
 	return "cf:" + c.RepoPath + "|" + c.Path + "|" + c.Section
+}
+
+// 分区组：diff 列表按 git 状态分成两个连续区段（已暂存在上，未暂存/
+// 未跟踪在下），组标题行可点击折叠，组内保持层级树或平铺布局。
+const (
+	groupStaged   = "staged"
+	groupUnstaged = "unstaged"
+)
+
+func groupID(section string) string { return "group:" + section }
+
+func groupLabel(section string) string {
+	if section == groupStaged {
+		return "已暂存"
+	}
+	return "未暂存"
 }
 
 // treeItem 是改动树的一个节点：目录（含仓库节点）或文件。
@@ -102,9 +130,11 @@ func newTrieNode() *trieNode {
 
 // buildChangesTree 跨仓库聚合改动：仓库按 rel 折叠成目录层级，改动文件挂各自仓库下，
 // 没有改动的仓库也入树（空节点）。根仓库（rel 为空）不建目录层，由顶层单行承载。
-// scanRoot 是扫描根绝对路径，用于给目录节点拼绝对路径。
+// scanRoot 是扫描根绝对路径，用于给目录节点拼绝对路径；section 是分区组名，
+// 参与目录/仓库行 id（同目录在两个组里各有一行）。调用方已按分区过滤 changes
+// 与 repos（干净仓库只进入有改动的组）。
 // 返回顶层节点与 id → 节点索引（Outline 的 children 查找用）。
-func buildChangesTree(scanRoot string, repos []git.Repo, changes []git.Change) ([]*treeItem, map[string]*treeItem) {
+func buildChangesTree(scanRoot string, repos []git.Repo, changes []git.Change, section string) ([]*treeItem, map[string]*treeItem) {
 	root := newTrieNode()
 
 	// 先铺所有仓库，保证干净仓库也出现在树里
@@ -172,13 +202,13 @@ func buildChangesTree(scanRoot string, repos []git.Repo, changes []git.Change) (
 			child.label = name
 			// 仓库节点与普通目录节点分开标记，便于空仓库显示为普通文字
 			if r := node.dirs[name].repo; r != nil {
-				child.id = repoID(r.Path)
+				child.id = repoID(section, r.Path)
 				child.isRepo = true
 				if child.count == 0 {
 					child.rank = 0
 				}
 			} else {
-				child.id = dirID(childPath)
+				child.id = dirID(section, childPath)
 			}
 			index[child.id] = child
 			item.kids = append(item.kids, child)
@@ -213,7 +243,7 @@ func buildChangesTree(scanRoot string, repos []git.Repo, changes []git.Change) (
 		tree.kids[i] = compressDirChain(tree.kids[i])
 	}
 	if root.repo != nil {
-		id := repoID(root.repo.Path)
+		id := repoID(section, root.repo.Path)
 		item := &treeItem{
 			id:     id,
 			label:  root.repo.Name,
@@ -290,35 +320,102 @@ func sortedFileRows(node *trieNode) []fileRow {
 	return rows
 }
 
+// changeGroup 是一个分区组（已暂存/未暂存）的改动派生：组内独立建树、
+// 独立平铺排序。untracked 归未暂存组（与 VS Code 的「更改」一致）。
+type changeGroup struct {
+	section  string
+	roots    []*treeItem
+	flat     []git.Change
+	flatRows []sideRow // 组内平铺行（不含组标题）
+}
+
 // changeTreePane 是改动侧栏（层级树与列表布局）的视图状态。唯一写点：
 // tree.rebuild/rebuildRows（扫描与合并后）、toggleChange 的收起集合、
-// 渲染帧里的两套选区（selList 经 newSelList 构造，坑 11 的 -1 起步由
-// selList 承载；branch 行点击后归 -1 已收进 treeList）。
+// toggleGroup 的组折叠、渲染帧里的两套选区（selList 经 newSelList 构造，
+// 坑 11 的 -1 起步由 selList 承载；branch/组标题行点击后归 -1 已收进 treeList）。
 type changeTreePane struct {
-	roots []*treeItem
+	// groups 固定两组，顺序即渲染顺序：已暂存在上、未暂存在下
+	groups [2]changeGroup
+	// index 合并两组的节点索引（目录/仓库 id 带分区，键唯一）
 	index map[string]*treeItem
 	// collapsed 只记用户显式收起的 branch 条目（id → 收起）：改动树默认
 	// 全展开，缺省（不在集合里）= 展开，扫描新增目录自动展开，跨扫描按 id 保持
 	collapsed map[string]bool
-	rows      []sideRow
-	list      selList
-	flat      []git.Change
-	flatRows  []sideRow
-	flatList  selList
-	layout    bool // true=列表布局
+	// groupCollapsed 记用户显式收起的组标题（group:<section>）：缺省展开
+	groupCollapsed map[string]bool
+	rows           []sideRow
+	list           selList
+	flatRows       []sideRow
+	flatList       selList
+	layout         bool // true=列表布局
 }
 
-// rebuild 按模型重建层级树与列表布局的全部派生（rebuildDerived 编排调用）。
+// rebuild 按模型重建两组改动树与列表布局的全部派生（rebuildDerived 编排调用）。
 func (t *changeTreePane) rebuild(root string, repos []git.Repo, changes []git.Change) {
-	t.roots, t.index = buildChangesTree(root, repos, changes)
+	t.groups = [2]changeGroup{{section: groupStaged}, {section: groupUnstaged}}
+	t.index = map[string]*treeItem{}
+	for gi := range t.groups {
+		g := &t.groups[gi]
+		g.flat = sortChanges(sectionChanges(changes, g.section))
+		// 干净仓库不再作为空节点出现：只把它们铺进有改动的组，且只铺该组
+		// changes 涉及的仓库——两组各铺一份会重复，也不符合分组语义
+		var idx map[string]*treeItem
+		g.roots, idx = buildChangesTree(root, reposWithChanges(repos, g.flat), g.flat, g.section)
+		for id, it := range idx {
+			t.index[id] = it
+		}
+		g.flatRows = flatChangeRows(repos, g.flat)
+	}
 	t.rebuildRows()
-	t.flat = sortChanges(changes)
-	t.flatRows = t.flatChangeRows(repos)
 }
 
-// rebuildRows 把改动树按展开态拍平成渲染行；聚合（rank/count）已在
-// buildChangesTree 算好，这里只做前序遍历。在 rebuild 与开合动作后调用，
-// 不在每帧重建。
+// sectionChanges 过滤出一个分区组的改动：已暂存组只收 staged，未暂存组收
+// 其余（unstaged 与 untracked）。
+func sectionChanges(changes []git.Change, section string) []git.Change {
+	var out []git.Change
+	for _, c := range changes {
+		if section == groupStaged {
+			if c.Section != groupStaged {
+				continue
+			}
+		} else if c.Section == groupStaged {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// reposWithChanges 只保留该组改动涉及的仓库：分组后干净仓库不再显示为空
+// 节点（否则同一批干净仓库会在两个组里重复出现）。
+func reposWithChanges(repos []git.Repo, changes []git.Change) []git.Repo {
+	used := map[string]bool{}
+	for _, c := range changes {
+		used[c.RepoPath] = true
+	}
+	out := make([]git.Repo, 0, len(repos))
+	for _, r := range repos {
+		if used[r.Path] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// groupRows 生成组标题行（两套布局共用）。
+func (t *changeTreePane) groupRows(g *changeGroup) sideRow {
+	return sideRow{
+		id:     groupID(g.section),
+		label:  groupLabel(g.section),
+		header: true,
+		open:   !t.groupCollapsed[groupID(g.section)],
+		count:  len(g.flat),
+	}
+}
+
+// rebuildRows 把两组改动树按展开态拍平成渲染行（组标题 + 组内行）；
+// 聚合（rank/count）已在 buildChangesTree 算好，这里只做前序遍历。
+// 在 rebuild、目录开合与组折叠后调用，不在每帧重建。
 func (t *changeTreePane) rebuildRows() {
 	t.rows = nil
 	var walk func(items []*treeItem, depth int)
@@ -344,7 +441,33 @@ func (t *changeTreePane) rebuildRows() {
 			}
 		}
 	}
-	walk(t.roots, 0)
+	for gi := range t.groups {
+		g := &t.groups[gi]
+		if len(g.flat) == 0 {
+			continue // 空组不显示标题
+		}
+		t.rows = append(t.rows, t.groupRows(g))
+		if t.groupCollapsed[groupID(g.section)] {
+			continue
+		}
+		walk(g.roots, 0)
+	}
+	t.rebuildFlatRows()
+}
+
+// rebuildFlatRows 拼平铺布局行：组标题 + 组内文件行（组折叠时只留标题）。
+func (t *changeTreePane) rebuildFlatRows() {
+	t.flatRows = nil
+	for gi := range t.groups {
+		g := &t.groups[gi]
+		if len(g.flat) == 0 {
+			continue
+		}
+		t.flatRows = append(t.flatRows, t.groupRows(g))
+		if !t.groupCollapsed[groupID(g.section)] {
+			t.flatRows = append(t.flatRows, g.flatRows...)
+		}
+	}
 }
 
 // toggleChange 开合一个 branch 条目：展开=从收起集合里删掉（回到缺省展开），
@@ -361,11 +484,25 @@ func (ws *workspace) toggleChange(id string) {
 	ws.tree.rebuildRows()
 }
 
+// toggleGroup 开合一个分区组（点组标题行）：组内行整体收起/展开，
+// 组标题保持可见。
+func (ws *workspace) toggleGroup(id string) {
+	if ws.tree.groupCollapsed == nil {
+		ws.tree.groupCollapsed = map[string]bool{}
+	}
+	if ws.tree.groupCollapsed[id] {
+		delete(ws.tree.groupCollapsed, id)
+	} else {
+		ws.tree.groupCollapsed[id] = true
+	}
+	ws.tree.rebuildRows()
+}
+
 // flatChangeRows 是列表布局的渲染行：全叶子、零缩进，名称为仓库相对完整路径
 // （根仓库没有 rel，用仓库显示名）。
-func (t *changeTreePane) flatChangeRows(repos []git.Repo) []sideRow {
-	rows := make([]sideRow, len(t.flat))
-	for i, ch := range t.flat {
+func flatChangeRows(repos []git.Repo, changes []git.Change) []sideRow {
+	rows := make([]sideRow, len(changes))
+	for i, ch := range changes {
 		letter, rank := statusRank(ch.Code, ch.Section)
 		rel := ch.RepoRel
 		if rel == "" {
@@ -375,7 +512,7 @@ func (t *changeTreePane) flatChangeRows(repos []git.Repo) []sideRow {
 			id:     fileID(ch),
 			label:  rel + "/" + ch.Path,
 			abs:    changeAbs(ch),
-			change: &t.flat[i],
+			change: &changes[i],
 			letter: letter,
 			rank:   rank,
 		}
