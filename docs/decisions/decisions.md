@@ -4,14 +4,17 @@
 
 ## 项目定位
 
-唯一动机：**多窗口同时看多个根目录**——MyGo 的 `NewWindow` 是一等公民
-能力。界面形态 native UI（无 webview，启动即开窗）。
+唯一动机：**同时看多个根目录**。界面形态 native UI（无 webview，启动即开窗）。
+窗口形态已从初版的多窗口（每窗一个根目录）收敛为**单窗口多 tab**——tab 条
+自绘在标题栏区，tab 即项目容器，本文件后续决策均以单窗多 tab 为前提。
 
 ## 已钉死的关键决策
 
-- **无主窗口**：每个窗口自带选择态（最近目录 + 系统目录对话框）；再次启动 =
-  已有实例开新窗口（`RequestSingleInstanceLock` + `OnSecondInstance`）；
-  最后一个窗口关闭即退出（框架默认）。
+- **单窗口 + 单实例**：全应用唯一窗口（`TitleBarHidden` 保留红绿灯）；
+  再次启动不另起进程，只把已有窗口带到前台（`RequestSingleInstanceLock` +
+  `OnSecondInstance`，见 main.go）。最后一个 tab 关闭回选择态，不退出应用。
+  替代初版「无主窗口：每窗自带选择态、二次启动开新窗、最后窗口关闭即退出」
+  的多窗口模型。
 - **diff/代码查看/Markdown 接官方组件**（2026-11-15 二次决策，替代最初的「diff 自研」）：
   `ui/editor` 子包（v0.9.0 已含）的 `DiffView`/`View`/`ParsePatch` 与 `ui/markdown` 的
   `View` 覆盖了自研 LCS diff、三态语法高亮与 Markdown 解析的全部能力且更强

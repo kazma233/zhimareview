@@ -5,15 +5,18 @@
 ## 结构
 
 ```
-main.go              进程入口：调用 app.go 的单实例锁与开窗流程
+main.go              进程入口：单实例锁（二次启动仅聚焦已有窗口）与开窗流程
 app.go               application 壳（单窗多 tab、tab 管理/会话恢复/落盘、窗口生命周期）
+appmenu.go           应用菜单：Cmd/Ctrl+W 关标签页与非 mac 退出项的归属源
 workspace.go         workspace 状态机（pick/work 两态）与顶栏/侧栏/主区路由、入场视图
+pipeline.go          loadAsync 异步管线：后台计算 + 主线程落地，headless 下整条同步
 scan.go              扫描编排、派生重建、仓库/改动模型查询与按需刷新
 picker.go            选择态：最近目录 + 系统目录对话框 + 进入工作区
 remote.go            fetch/pull/全部 fetch 的编排、进度模态与错误聚合
 tabbar.go            自绘标题栏 tab 条（TabsBase + ×/＋ + 拖拽排序 + 颜色/重命名 + DragWindow）
 errdialog.go         错误弹窗：标题 + 可滚动正文 + 复制/关闭
 dialog.go            通用模态骨架：标题/副标题、分隔线、正文与底部动作、默认宽度与间距
+widgets.go           复用组件：tapRow/badge/emptyState 与侧栏树三件套 sideRow/sideRowView/treeList
 search.go            侧栏全局搜索（文件名/目录名/内容）
 sidebar.go           改动树构建（分区组、跨仓库折叠、状态色继承）与列表排序
 diffview.go          diff 视图接入（editor.DiffView + 落盘还原）与写操作编排
@@ -24,7 +27,7 @@ dirmode.go           目录树懒加载/拍平/聚合
 fileview.go          文件查看与打开/重载/跳行（editor.View 只读高亮/图片/二进制/图片扩展名）
 theme.go             设计令牌：色调三层（主色/状态色/中性色）、字号阶梯、行度量
 watch.go             WatchFiles 监听循环、按仓库合并刷新、结构兜底
-internal/git/        git CLI 封装：仓库发现、porcelain 三区、对象读取、暂存/提交/revert、log 解析、fetch/pull、分支跟踪状态、全局搜索
+internal/git/        git CLI 封装：仓库发现、porcelain 三区、对象读取、暂存/revert、log 解析、fetch/pull、分支跟踪状态、全局搜索
 internal/store/      最近目录、会话与全局配置 JSON 持久化（会话按 tab 记录根目录/名称/颜色；config.json 存 diff 查看偏好）
 ```
 
