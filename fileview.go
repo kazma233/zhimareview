@@ -82,10 +82,17 @@ func dirOf(abs string) string {
 	return abs[:idx]
 }
 
-// openFile 打开一个工作区文件：「查看 diff」勾选且带改动时直接展示 diff
-// （默认全展开），否则只读查看原内容；文件属于某仓库时同步当前仓库。
+// openFile 打开一个工作区文件：「查看 diff」勾选且带改动时直接展示 diff，
+// 否则只读查看原内容；文件属于某仓库时同步当前仓库。展开态/布局是全局偏好。
 func (ws *workspace) openFile(abs string) {
 	ws.openFileAt(abs, 0)
+}
+
+// fileExists 判断路径是否仍是可读取的普通文件：目录入口的 diff 改动
+// 消失后据此决定回落只读查看还是回到空态。
+func fileExists(abs string) bool {
+	info, err := os.Stat(abs)
+	return err == nil && !info.IsDir()
 }
 
 // reloadOpenFile 是 watch 命中后的当前文件重读：不走 openFileAt 重新打开
@@ -109,9 +116,10 @@ func (ws *workspace) openFileAt(abs string, line int) {
 	if repo := ws.repoForAbs(abs); repo != "" {
 		ws.switchActiveRepo(repo)
 	}
-	if ws.dirs.showDiff {
+	// 「查看 diff」是全局偏好：带改动且勾选时直接进 diff，否则只读查看
+	if ws.diffPrefs().ShowDiff {
 		if ch := ws.changeForAbs(abs); ch != nil {
-			ws.openDiffExpandedAt(*ch, line)
+			ws.openDiffFromDirAt(*ch, line)
 			return
 		}
 	}
@@ -137,7 +145,7 @@ type fileResult struct {
 // 查看。不属于开关管辖的内容（diff 列表入口的 diff、无改动文件）不动。
 func (ws *workspace) retargetOpened() {
 	switch {
-	case ws.dirs.showDiff:
+	case ws.diffPrefs().ShowDiff:
 		if ws.dirs.file != nil && ws.changeForAbs(ws.dirs.file.abs) != nil {
 			ws.openFile(ws.dirs.file.abs)
 		}

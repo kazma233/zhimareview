@@ -90,31 +90,47 @@ func ReadStatus(repoPath string) (*RepoStatus, error) {
 // 并发上限 8 个 git 进程；单个仓库失败不影响其它仓库。
 // 侧栏分区分组顺序：先 unstaged、再 staged、最后 untracked。
 func CollectChanges(repos []Repo) []Change {
+	return CollectChangesChecked(repos).Changes
+}
+
+// CollectChangesResult 是一次改动采集的结果。Failed 记录读取失败的仓库
+// （路径 → 错误）：失败不能当作「没有改动」，否则瞬态失败（rebase 中、
+// index 被锁或损坏）会把用户正在看的改动整段抹掉。调用方应沿用上一版
+// 模型里失败仓库的条目。
+type CollectChangesResult struct {
+	Changes []Change
+	Failed  map[string]error
+}
+
+// CollectChangesChecked 同 CollectChanges，并返回读取失败的仓库。
+func CollectChangesChecked(repos []Repo) CollectChangesResult {
 	type entry struct {
-		repo   Repo
 		status *RepoStatus
+		err    error
 	}
-	perRepo := mapLimit(repos, 8, func(repo Repo) *entry {
+	perRepo := mapLimit(repos, 8, func(repo Repo) entry {
 		st, err := ReadStatus(repo.Path)
-		if err != nil {
-			return nil
-		}
-		return &entry{repo: repo, status: st}
+		return entry{status: st, err: err}
 	})
 
-	var result []Change
-	for _, e := range perRepo {
-		if e == nil {
+	var result CollectChangesResult
+	for i, e := range perRepo {
+		repo := repos[i]
+		if e.err != nil {
+			if result.Failed == nil {
+				result.Failed = map[string]error{}
+			}
+			result.Failed[repo.Path] = e.err
 			continue
 		}
 		for _, f := range e.status.Unstaged {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "unstaged", string(f.Y)})
+			result.Changes = append(result.Changes, Change{repo.Path, repo.Rel, f.Path, f.OrigPath, "unstaged", string(f.Y)})
 		}
 		for _, f := range e.status.Staged {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "staged", string(f.X)})
+			result.Changes = append(result.Changes, Change{repo.Path, repo.Rel, f.Path, f.OrigPath, "staged", string(f.X)})
 		}
 		for _, f := range e.status.Untracked {
-			result = append(result, Change{e.repo.Path, e.repo.Rel, f.Path, f.OrigPath, "untracked", "?"})
+			result.Changes = append(result.Changes, Change{repo.Path, repo.Rel, f.Path, f.OrigPath, "untracked", "?"})
 		}
 	}
 	return result

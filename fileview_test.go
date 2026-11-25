@@ -65,8 +65,8 @@ func TestCopyFilePath(t *testing.T) {
 }
 
 // 目录列表打开文件的分流契约：「查看 diff」勾选且带改动的文件直接进 diff
-// 且默认全展开（ws.file 让位）；不勾选（默认）时带改动的文件也只读查看
-// 原内容；无改动的文件任何状态下都走只读查看（editor 状态加载完成）。
+// （展开态取全局偏好，ws.file 让位）；不勾选（默认）时带改动的文件也只读
+// 查看原内容；无改动的文件任何状态下都走只读查看（editor 状态加载完成）。
 func TestOpenFileRoutesToDiff(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	gitInit(t, root)
@@ -90,8 +90,8 @@ func TestOpenFileRoutesToDiff(t *testing.T) {
 	ws.applyScanState(root, repos, git.CollectChanges(repos))
 
 	// 默认不勾选「查看 diff」：带改动的文件也只读查看原内容
-	if ws.dirs.showDiff {
-		t.Fatal("dirShowDiff should default to false")
+	if ws.diffPrefs().ShowDiff {
+		t.Fatal("showDiff should default to false")
 	}
 	ws.openFile(root + "/changed.txt")
 	if ws.diffv.open != nil || ws.dirs.file == nil {
@@ -106,15 +106,17 @@ func TestOpenFileRoutesToDiff(t *testing.T) {
 	}
 	waitFor(t, func() bool { return !ws.dirs.file.loading && ws.dirs.file.kind == "text" }, 5*time.Second, "file not loaded")
 
-	// 勾选「查看 diff」后：带改动 → diff 全展开，文件查看让位
-	ws.dirs.showDiff = true
+	// 勾选「查看 diff」（全局偏好）：带改动 → diff，文件查看让位；
+	// 展开态同样按全局偏好（这里设为展开）
+	ws.diffPrefs().ShowDiff = true
+	ws.diffPrefs().Expand = true
 	ws.openFile(root + "/changed.txt")
 	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
 	if ws.diffv.open == nil || ws.dirs.file != nil {
 		t.Errorf("changed file should open as diff: diff=%v file=%v", ws.diffv.open != nil, ws.dirs.file != nil)
 	}
 	if !ws.diffv.ed.ExpandUnchanged {
-		t.Error("dir-tab diff should default to fully expanded")
+		t.Error("dir-opened diff should follow the global expand pref")
 	}
 }
 
@@ -158,8 +160,8 @@ func TestDirShowDiffCheckbox(t *testing.T) {
 		t.Error("clean file view should not show 查看diff checkbox")
 	}
 
-	// 目录入口的 diff：头部出现 checkbox
-	ws.dirs.showDiff = true
+	// 目录入口的 diff：头部出现 checkbox（全局「查看 diff」勾选）
+	ws.diffPrefs().ShowDiff = true
 	ws.openFile(root + "/changed.txt")
 	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
 	tt.Frame()
@@ -199,7 +201,7 @@ func TestDirShowDiffRetarget(t *testing.T) {
 	tt := ui.NewTester(ws.view, 1180, 800)
 	tt.Frame()
 
-	// 默认只读打开带改动文件，勾选后主区切到 diff（全展开）
+	// 默认只读打开带改动文件，勾选后主区切到 diff（展开态取全局偏好）
 	ws.openFile(root + "/changed.txt")
 	waitFor(t, func() bool { return !ws.dirs.file.loading && ws.dirs.file.kind == "text" }, 5*time.Second, "file not loaded")
 	tt.Frame() // checkbox 在内容头部：主区打开后重建帧才能点击
@@ -207,9 +209,9 @@ func TestDirShowDiffRetarget(t *testing.T) {
 		t.Fatalf("click 查看diff: %v", err)
 	}
 	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
-	if ws.diffv.open == nil || ws.dirs.file != nil || !ws.diffv.ed.ExpandUnchanged || !ws.diffv.fromDir {
-		t.Errorf("checking 查看diff should retarget file to diff: diff=%v file=%v expand=%v fromDir=%v",
-			ws.diffv.open != nil, ws.dirs.file != nil, ws.diffv.ed.ExpandUnchanged, ws.diffv.fromDir)
+	if ws.diffv.open == nil || ws.dirs.file != nil || !ws.diffv.fromDir {
+		t.Errorf("checking 查看diff should retarget file to diff: diff=%v file=%v fromDir=%v",
+			ws.diffv.open != nil, ws.dirs.file != nil, ws.diffv.fromDir)
 	}
 
 	// 取消勾选后目录入口的 diff 切回只读查看
@@ -221,7 +223,7 @@ func TestDirShowDiffRetarget(t *testing.T) {
 	}
 
 	// diff 列表入口打开的 diff 不受开关管辖：头部没有 checkbox，无从翻转
-	ws.dirs.showDiff = true
+	ws.diffPrefs().ShowDiff = true
 	ws.openDiff(ws.changes[0])
 	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
 	if ws.diffv.fromDir {

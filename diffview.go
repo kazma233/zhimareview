@@ -103,10 +103,10 @@ func isBinary(content string) bool {
 }
 
 // diffPane 是主区 diff 视图的状态，也是「打开会话」的所有者：每次打开
-// 递增 seq（世代），在途加载凭世代落地（最新打开者胜），翻转（flip）是
+// 递增 seq（世代），在途加载凭世代落地（最新打开者胜），flip/adopt 是
 // 同一会话内的原地改写、世代不变。唯一写点：openDiffAs/applyDiffState
-// 的打开与加载、toggleStageFile 的分区翻转、closeDiff/reloadDiff、
-// 渲染帧里的布局与展开开关。
+// 的打开与加载、toggleStageFile 的分区翻转、flip/adopt 的会话对齐、
+// closeDiff/reloadDiff、渲染帧里的布局与展开开关。
 type diffPane struct {
 	open *git.Change // 当前打开的 diff（nil=未打开）
 	// seq 是打开会话世代：openDiffAs 递增并捕获，applyDiffState 校验
@@ -116,9 +116,8 @@ type diffPane struct {
 	loading bool
 	sides   *diffSides
 	bitmap  *ui.Bitmap // 二进制图片的解码结果
-	// expand 是当前打开 diff 的初始展开态：目录列表打开=true（改动全部
-	// 可见），diff 列表打开=false（上下文折叠）；头部「展开未修改」
-	// checkbox 以它翻转
+	// expand 是当前打开 diff 的展开态：打开时取全局偏好（diffPrefs().Expand），
+	// 头部「展开未修改」开关翻转后写回全局偏好并落盘
 	expand bool
 	// fromDir 标记是否目录列表入口打开：「查看 diff」开关翻转时只切换
 	// 目录入口的内容，diff 列表打开的 diff 不受该开关管辖
@@ -127,7 +126,7 @@ type diffPane struct {
 	// 打开 diff 时带上，布局量好后（下一帧）滚动一次并清零
 	jumpLine int
 	// ed 是官方 diff 视图的跨帧状态（缓冲、布局、展开的上下文与滚动位置），
-	// 查找条与还原按钮也由它承载；布局统一/分栏的偏好在窗口级 ws.diffSeg，
+	// 查找条与还原按钮也由它承载；布局偏好是全局配置（diffPrefs().Layout），
 	// 渲染帧经 diffLayout 换算后写入 ed.Layout
 	ed editor.DiffState
 }
@@ -154,33 +153,45 @@ func (d *diffPane) flip() {
 	}
 }
 
-// openDiff 打开一个文件的 diff（diff 列表入口：上下文默认折叠）：先置占位
-// 再后台加载两侧。帧内调用时改状态即触发重建，无需 Invalidate。
+// adopt 把会话对齐到模型里的当前条目（同一文件的分区被外部改变）：
+// 原地改写、世代不变，重读由 reloadDiff 走加载管线判定内容。
+func (d *diffPane) adopt(v git.Change) {
+	if d.open == nil {
+		return
+	}
+	*d.open = v
+}
+
+// openDiff 打开一个文件的 diff（diff 列表入口）：先置占位再后台加载两侧。
+// 展开态取全局偏好（diffPrefs().Expand）。帧内调用时改状态即触发重建，
+// 无需 Invalidate。
 func (ws *workspace) openDiff(v git.Change) {
 	ws.diffv.fromDir = false
-	ws.openDiffAs(v, false, 0)
+	ws.openDiffAs(v, 0)
 }
 
-// openDiffExpanded 目录列表入口：文件带改动时直接展示 diff，默认全展开。
-func (ws *workspace) openDiffExpanded(v git.Change) {
-	ws.openDiffExpandedAt(v, 0)
+// openDiffFromDir 是目录列表入口：文件带改动时直接展示 diff；「查看 diff」
+// 开关翻转时只切换这类内容（fromDir）。展开态与布局同样取全局偏好。
+func (ws *workspace) openDiffFromDir(v git.Change) {
+	ws.openDiffFromDirAt(v, 0)
 }
 
-// openDiffExpandedAt 是 openDiffExpanded 的带定位版本：打开后滚到新侧第
+// openDiffFromDirAt 是 openDiffFromDir 的带定位版本：打开后滚到新侧第
 // line 行（1 起，0 = 从头），搜索结果的内容命中靠它定位。
-func (ws *workspace) openDiffExpandedAt(v git.Change, line int) {
+func (ws *workspace) openDiffFromDirAt(v git.Change, line int) {
 	ws.diffv.fromDir = true
-	ws.openDiffAs(v, true, line)
+	ws.openDiffAs(v, line)
 }
 
-func (ws *workspace) openDiffAs(v git.Change, expanded bool, line int) {
+func (ws *workspace) openDiffAs(v git.Change, line int) {
 	ws.dirs.file = nil // 主区以最后点击的为准：打开 diff 即让位出文件查看
 	// 预览模式不记忆：每次打开都是差异视图，用户手动切预览
 	ws.mdPreview = false
 	ws.diffv.open = &v
 	ws.diffv.seq++
 	seq := ws.diffv.seq
-	ws.diffv.expand = expanded
+	// 展开未修改是全局偏好：打开只读配置，不写盘
+	ws.diffv.expand = ws.diffPrefs().Expand
 	ws.diffv.loading = true
 	ws.diffv.sides = nil
 	ws.diffv.jumpLine = line
@@ -194,6 +205,10 @@ func (ws *workspace) applyDiffState(seq int, v git.Change, sides *diffSides) {
 	if ws.diffv.open == nil || ws.diffv.seq != seq {
 		return
 	}
+	// 分区决定写能力（staged 只读无还原），不能随内容比对跳过：暂存/取消
+	// 暂存或外部改变分区后两侧文本可能碰巧相同（HEAD→工作区 与 HEAD→
+	// index 同为一份内容），能力仍须跟着新分区走
+	ws.diffv.ed.HunkActions = v.Section != "staged"
 	// 两侧内容没变（watch 重读）：不动已建缓冲与解码结果——滚动、展开态
 	// 与图片都属于已打开的会话，重复重建会让界面持续闪烁
 	if sidesContentEqual(ws.diffv.sides, sides) {
@@ -218,15 +233,14 @@ func (ws *workspace) applyDiffState(seq int, v git.Change, sides *diffSides) {
 		return
 	}
 	// 官方 diff 视图：统一/分栏、折叠上下文、内置查找；staged 只读无还原。
-	// ExpandUnchanged 按入口给定：目录列表打开=全展开，diff 列表=折叠
-	// （布局在渲染帧按 ws.diffSeg 写入，打开时不定）
+	// ExpandUnchanged 取打开时的全局偏好（diffPane.expand）
+	// （布局在渲染帧按全局偏好 diffPrefs().Layout 写入，打开时不定）
 	ws.diffv.ed.Old = editor.NewBuffer(sides.oldValue)
 	ws.diffv.ed.New = editor.NewBuffer(sides.newValue)
 	lang := editor.LanguageFor(v.Path) // 未知扩展名返回 nil，按纯文本
 	ws.diffv.ed.Old.SetLanguage(lang)
 	ws.diffv.ed.New.SetLanguage(lang)
 	ws.diffv.ed.ExpandUnchanged = ws.diffv.expand
-	ws.diffv.ed.HunkActions = v.Section != "staged"
 	ws.diffv.ed.RenderHunkActions = ws.renderHunkActions
 	// 折叠分隔条走应用版渲染：官方默认的「N unmodified lines」按钮一次
 	// 点击全展开整段折叠行，这里改为分步展开（见 renderSeparator）
@@ -350,6 +364,9 @@ func (ws *workspace) expandToggle(c *ui.Context) {
 	})
 	if b.Clicked() {
 		ws.diffv.expand = !ws.diffv.expand
+		// 展开未修改是全局偏好：显式切换即写内存并落盘
+		ws.diffPrefs().Expand = ws.diffv.expand
+		ws.app.saveConfig()
 		if ws.diffv.expand {
 			ws.diffv.ed.ExpandAll()
 		} else {
@@ -363,6 +380,39 @@ func (ws *workspace) closeDiff() {
 	ws.diffv.open = nil
 	ws.diffv.sides = nil
 	ws.diffv.jumpLine = 0
+}
+
+// reconcileOpenDiff 让打开中的 diff 跟随改动模型，写点在模型变更后的
+// 统一收尾（applyChangedModel）：
+//   - 文件仍在同一分区：不动会话——滚动、展开与缓冲属于已打开的内容；
+//   - 分区被外部改变（暂存/取消暂存/提交）：对齐到模型里的当前条目并
+//     重读，头部徽标、可写性与两侧内容都以该条目为准；
+//   - 文件已不在改动列表（外部还原/提交/删除）：目录入口且文件还在
+//     磁盘上时回落只读查看，否则关闭会话回到未选择文件的空态。
+func (ws *workspace) reconcileOpenDiff() {
+	open := ws.diffv.open
+	if open == nil {
+		return
+	}
+	for i := range ws.changes {
+		if fileID(ws.changes[i]) == fileID(*open) {
+			return
+		}
+	}
+	for i := range ws.changes {
+		if sameChange(ws.changes[i], *open) {
+			ws.diffv.adopt(ws.changes[i])
+			ws.reloadDiff()
+			return
+		}
+	}
+	// 目录入口的内容：文件仍在磁盘上就回落只读查看（用户从目录树来）；
+	// 已被删除则没有可看的内容，回到未选择空态
+	if abs := ws.diffv.target(); ws.diffv.fromDir && fileExists(abs) {
+		ws.openFile(abs)
+		return
+	}
+	ws.closeDiff()
 }
 
 // reloadDiff 重新加载当前打开的 diff（watch 命中或暂存切换后）；不走
@@ -546,13 +596,13 @@ func (ws *workspace) diffView(c *ui.Context) {
 			if ws.diffv.fromDir || isMD {
 				ui.Divider(c)
 			}
-			// 浏览工具组：布局形态（统一/分栏分段切换，与历史详情共用
-			// ws.diffSeg）→ 内容范围（展开未修改）。查找没有按钮：编辑器
-			// keymap 自带 Cmd/Ctrl+F（keymap.go），焦点在 diff 内容区即生效
-			layoutSwitch(c, ws)
+			// 浏览工具组：布局形态（统一/分栏，全局偏好）→ 内容范围
+			//（展开未修改，全局偏好）。查找没有按钮：编辑器 keymap 自带
+			// Cmd/Ctrl+F（keymap.go），焦点在 diff 内容区即生效
+			ws.diffLayoutSwitch(c)
 			// 展开未修改的图标开关（仅文本 diff 有意义）：收起态上下尖角
 			// 外扩=点击全展开，展开态尖角相向=点击收起；打开时的初始态
-			// 由入口决定（openDiffAs）
+			// 取全局偏好，切换即写回并落盘
 			if ws.diffv.sides != nil && !ws.diffv.sides.binary {
 				ws.expandToggle(c)
 			}
@@ -583,7 +633,7 @@ func (ws *workspace) diffView(c *ui.Context) {
 		case ws.diffv.sides != nil:
 			// 布局在渲染帧统一落值：切换偏好即帧内生效，也免去在切换
 			// 控件处逐视图回写
-			ws.diffv.ed.Layout = diffLayout(ws.diffSeg)
+			ws.diffv.ed.Layout = diffLayout(ws.diffPrefs().Layout)
 			editor.DiffView(c, &ws.diffv.ed).Fill()
 			// 搜索结果定位排在 diff 构建之后：分栏的共享滚动由构建过程
 			// 装配，先滚会落在空的共享滚动上被钳回 0。等布局量过一帧

@@ -123,3 +123,37 @@ func TestLoadSessionFiltersEmptyRoots(t *testing.T) {
 		t.Fatalf("LoadSession() = %+v, want 2 tabs with active 2", got)
 	}
 }
+
+func TestConfigRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	// 缺失文件 → 默认值（统一、折叠、不勾选）
+	if got := LoadConfig(dir); got.Diff != (DiffPrefs{}) {
+		t.Fatalf("LoadConfig(missing) = %+v, want defaults", got.Diff)
+	}
+	want := Config{Diff: DiffPrefs{Layout: 1, Expand: true, ShowDiff: true}}
+	if err := SaveConfig(dir, want); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadConfig(dir); got.Diff != want.Diff {
+		t.Fatalf("LoadConfig() = %+v, want %+v", got.Diff, want.Diff)
+	}
+}
+
+func TestLoadConfigCorruptAndInvalid(t *testing.T) {
+	dir := t.TempDir()
+	// 损坏 → 默认值
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadConfig(dir); got.Diff != (DiffPrefs{}) {
+		t.Errorf("LoadConfig(corrupt) = %+v, want defaults", got.Diff)
+	}
+	// 非法 layout 收敛到统一
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"diff":{"layout":7,"expand":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadConfig(dir)
+	if got.Diff.Layout != 0 || !got.Diff.Expand {
+		t.Errorf("LoadConfig(invalid layout) = %+v, want layout 0 expand true", got.Diff)
+	}
+}

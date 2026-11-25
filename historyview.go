@@ -170,9 +170,8 @@ func (ws *workspace) historyView(c *ui.Context) {
 						ui.Text(c, row.Subject).FontSize(tk.FontLG).FontWeight(600).SingleLine().ClipX()
 						ui.Textf(c, "%s · %s · %s", row.ShortHash, row.Author, row.Date).FontSize(tk.FontXS).TextColor(tk.Muted).SingleLine().ClipX()
 					})
-					// 布局分段与主 diff 共用偏好（逐文件小卡片默认吃统一
-					// 布局的窄幅优势）
-					layoutSwitch(c, ws)
+					// 布局与主 diff 共用全局偏好：显式切换即落盘，所有视图生效
+					ws.diffLayoutSwitch(c)
 				})
 				ui.Divider(c)
 
@@ -199,8 +198,8 @@ func (ws *workspace) historyView(c *ui.Context) {
 									}
 								})
 								if !fp.Binary {
-									// 布局与主 diff 共用偏好，渲染帧统一落值
-									d.Layout = diffLayout(ws.diffSeg)
+									// 布局是全局偏好，渲染帧统一落值
+									d.Layout = diffLayout(ws.diffPrefs().Layout)
 									editor.DiffView(c, d).FillWidth()
 								}
 							}

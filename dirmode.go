@@ -84,10 +84,7 @@ type dirPane struct {
 	expanded   map[string]bool
 	rows       []sideRow
 	list       selList
-	// showDiff 是目录列表的「查看 diff」开关：勾选后点带改动的文件直接
-	// 展示 diff，不勾选（默认）只读查看原内容
-	showDiff bool
-	file     *fileView
+	file       *fileView
 }
 
 // rebuildRows 把目录缓存按展开态拍平成渲染行，并聚合各目录的改动状态。

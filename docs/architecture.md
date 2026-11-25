@@ -25,7 +25,7 @@ fileview.go          文件查看与打开/重载/跳行（editor.View 只读高
 theme.go             设计令牌：色调三层（主色/状态色/中性色）、字号阶梯、行度量
 watch.go             WatchFiles 监听循环、按仓库合并刷新、结构兜底
 internal/git/        git CLI 封装：仓库发现、porcelain 三区、对象读取、暂存/提交/revert、log 解析、fetch/pull、分支跟踪状态、全局搜索
-internal/store/      最近目录与会话 JSON 持久化（会话按 tab 记录根目录/名称/颜色）
+internal/store/      最近目录、会话与全局配置 JSON 持久化（会话按 tab 记录根目录/名称/颜色；config.json 存 diff 查看偏好）
 ```
 
 ## 关键实现说明
@@ -36,6 +36,8 @@ internal/store/      最近目录与会话 JSON 持久化（会话按 tab 记录
 - **挂载契约**：内容必须在 `Children` 闭包内创建，闭包外建的元素不会挂载。
 - **有状态控件**：Tabs / Segmented / Combobox / TextInput / Split / 两棵树构建前统一加 `c.Key`，否则重建后状态错乱。
 - **tab 重排与重命名**：重排在帧末 `flushTabOps` 按 `*workspace` 身份落地（关闭会改下标，索引快照不可复用）；重命名在标签内用 `TextInputBase`，失焦提交延迟 `tabRenameBlurDelay`——按下别的控件时释放还没到，立即收窄 tab 会让点击落空。
+- **全局 diff 查看偏好**：`store.Config.Diff`（config.json，归 application、所有 tab 共享）只有三个值：统一/分栏、展开未修改、目录入口的「查看 diff」；打开 diff/文件只读配置，显式切换控件才写内存并同步落盘。history 详情与主 diff 共用布局值。无配置文件/损坏/非法 layout 按默认值（统一、折叠、不勾选）。
+- **模型变更收尾**：扫描与 watch 合并落到 `applyChangedModel`——先重建派生（`changeByAbs` 决定「查看 diff」分流），再让打开中的 diff 跟随模型（`reconcileOpenDiff`：同分区不动、分区改变 `adopt` 后重读、目录入口改动消失回落只读、否则关闭），最后重建侧栏行。`git.CollectChangesChecked` 返回读取失败的仓库，失败仓库沿用上一版条目，避免瞬态 git 错误被当成「改动消失」。
 - **全部 fetch 进度**：`git.FetchReposProgress` 在后台按仓库回调 start/done，回调经 `ws.post` 回主线程更新 `fetchAllPane`；`applyResults` 再用最终结果校准（防漏/防重）。模态关闭不取消后台 fetch；失败在模态内展示，模态已关时回落错误弹窗。
 - **通用模态**：`dialog.go` 的 `showDialog` 统一标题/副标题、分隔线、正文与底部动作；`dialogCard` 统一正文滚动卡片（Surface + 内边距，右侧留 14px 给覆盖式滚动条），错误弹窗与 fetch 进度模态共用。
 

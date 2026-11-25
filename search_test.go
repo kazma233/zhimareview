@@ -449,7 +449,7 @@ func TestSearchContentHitJumpsInDiff(t *testing.T) {
 	ws.root = root
 	ws.applyScanState(root, git.FindRepos(root), git.CollectChanges(git.FindRepos(root)))
 	ws.sidebarTab = "dir"
-	ws.dirs.showDiff = true
+	ws.diffPrefs().ShowDiff = true
 	tt := ui.NewTester(ws.view, 1180, 800)
 	tt.Frame()
 	ws.search.query = "needle"
@@ -462,8 +462,8 @@ func TestSearchContentHitJumpsInDiff(t *testing.T) {
 	}
 
 	for _, seg := range []int{0, 1} {
-		// 统一/分栏都定位到新侧的行
-		ws.diffSeg = seg
+		// 统一/分栏都定位到新侧的行：布局是全局偏好，打开即按它渲染
+		ws.diffPrefs().Layout = seg
 		// 行选区归位：叶子行保留选中，同一行再点不触发点击（treeList 契约）
 		ws.search.selList.sel = -1
 		if err := tt.Click("250 needle here"); err != nil {

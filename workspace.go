@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/markdown"
 	"zhimareview/internal/git"
+	"zhimareview/internal/store"
 )
 
 // tabMeta 是 tab 条上的展示元数据：用户重命名/设色与内联编辑态。归该
@@ -79,10 +80,9 @@ type workspace struct {
 	sidebarSize float32
 	mdPreview   bool             // Markdown 预览（文件查看与 diff 共用开关）
 	mdOpts      markdown.Options // Markdown 预览配置（LoadImage 随打开的文件更新）
-	// diffSeg 是 diff 布局的分段选择（0=统一 1=分栏）：主 diff 与历史详情
-	// 共用一个布局偏好；布局切换控件（layoutSwitch）直写此字段，
-	// 两个视图渲染时各自经 diffLayout 换算成官方布局
-	diffSeg     int
+	// localDiff 是 headless（无 application）时的全局 diff 偏好落点；
+	// 生产环境读写 application.cfg.Diff（见 diffPrefs）
+	localDiff   store.DiffPrefs
 	watchCancel context.CancelFunc
 
 	// 视图分区（值字段，永远在场；字段与其唯一写点见各分区类型）
@@ -106,6 +106,16 @@ func newWorkspace(app *application) *workspace {
 		dirs:        dirPane{list: newSelList()},
 		search:      searchPane{selList: newSelList()},
 	}
+}
+
+// diffPrefs 是 diff 查看的全局偏好（布局/展开/查看 diff）：生产环境归
+// application，所有 tab 读写同一份，显式切换时落盘 config.json；headless
+// 测试没有应用壳，用本 workspace 自带的一份，读行为与单 tab 一致。
+func (ws *workspace) diffPrefs() *store.DiffPrefs {
+	if ws.app != nil {
+		return &ws.app.cfg.Diff
+	}
+	return &ws.localDiff
 }
 
 // tabTitle 是 tab 条与窗口标题共用的展示名：用户重命名优先，否则 work

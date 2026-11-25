@@ -12,7 +12,7 @@ import (
 
 // application 是应用壳：单窗口承载多个项目 tab，每 tab 一个 workspace。
 // 窗口级状态（窗口、tab 集合、激活下标）归它，workspace 之间不共享可变
-// 状态；跨 tab 共享的最近目录与会话（internal/store）也由它写。
+// 状态；跨 tab 共享的最近目录、会话与应用配置（internal/store）也由它写。
 type application struct {
 	win *mygo.Window
 	// post 把函数投递到主线程队列执行，bindWindow 绑定 win.Update；
@@ -20,6 +20,12 @@ type application struct {
 	post   func(func())
 	tabs   []*workspace
 	active int
+	// userDir 是配置与会话的持久化目录（userDataDir）；空（headless
+	// 测试）= 不读写磁盘
+	userDir string
+	// cfg 是应用级配置（config.json）：diff 查看偏好全局一份，所有 tab
+	// 共享同一结构，显式切换时立即落盘
+	cfg store.Config
 	// tabScroll 是 tab 滚动区的横向偏移（TrackScroll 契约：状态挂应用，
 	// 跨帧保持滚动位置；tab 增删后越界由滚动容器钳回）
 	tabScroll ui.ScrollState
@@ -46,14 +52,29 @@ type tabMove struct {
 // 创建；headless 测试不经过它（自行构造 application）。
 var app *application
 
-// newApplication 构造应用壳并恢复上次会话。userDir 为空跳过会话读取
-// （headless 测试没有应用运行时）。
+// newApplication 构造应用壳并恢复上次会话与全局配置。userDir 为空跳过
+// 磁盘读取（headless 测试没有应用运行时），配置回默认值。
 func newApplication(userDir string) *application {
 	var sess *store.Session
+	var cfg store.Config
 	if userDir != "" {
 		sess = store.LoadSession(userDir)
+		cfg = store.LoadConfig(userDir)
 	}
-	return restoreApplication(sess)
+	a := restoreApplication(sess)
+	a.userDir = userDir
+	a.cfg = cfg
+	return a
+}
+
+// saveConfig 持久化应用级配置（diff 查看偏好的显式切换触发）。偏好是
+// 小文件，同步写避免并发写互相覆盖；失败静默——内存值仍然生效，下次
+// 显式操作会重试。
+func (a *application) saveConfig() {
+	if a == nil || a.userDir == "" {
+		return
+	}
+	_ = store.SaveConfig(a.userDir, a.cfg)
 }
 
 // restoreApplication 按会话重建 tab 集合：每个 root 一个干净的 work 态

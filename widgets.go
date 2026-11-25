@@ -235,13 +235,16 @@ func badge(c *ui.Context, text string) ui.Element {
 // dirShowDiffCheckbox 是主区内容头部的「查看 diff」开关：openFile 按它
 // 分流，翻转时已打开的内容跟随切换（retargetOpened）。默认不勾选——
 // 进目录先看原内容；只在开关管辖的内容上显示（带改动的文件、目录入口
-// 的 diff），调用方负责守卫。
+// 的 diff），调用方负责守卫。偏好是全局的：显式翻转即落盘，所有 tab 共用。
 func (ws *workspace) dirShowDiffCheckbox(c *ui.Context) {
-	prev := ws.dirs.showDiff
-	ui.Checkbox(c, &ws.dirs.showDiff, "查看 diff")
-	if ws.dirs.showDiff != prev {
-		ws.retargetOpened()
+	prefs := ws.diffPrefs()
+	prev := prefs.ShowDiff
+	ui.Checkbox(c, &prefs.ShowDiff, "查看 diff")
+	if prefs.ShowDiff == prev {
+		return
 	}
+	ws.app.saveConfig()
+	ws.retargetOpened()
 }
 
 // mdPreviewSwitch 是 Markdown 渲染模式的开关（预览 / 源码或差异）：
@@ -258,10 +261,21 @@ func (ws *workspace) mdPreviewSwitch(c *ui.Context, preview, other string) {
 	ws.mdPreview = mode == 0
 }
 
-// layoutSwitch 是 diff 布局的分段切换（统一/分栏）：主 diff 与历史详情
-// 共用窗口级偏好 ws.diffSeg，控件直写该字段，各视图渲染帧自行取值生效。
-func layoutSwitch(c *ui.Context, ws *workspace) {
-	ui.Segmented(c, &ws.diffSeg, "统一", "分栏").Label("diff 布局")
+// layoutSwitch 是统一/分栏的分段切换控件：主 diff 与历史详情共用同一个
+// 全局布局偏好，调用方负责在显式切换后落盘。
+func layoutSwitch(c *ui.Context, seg *int) {
+	ui.Segmented(c, seg, "统一", "分栏").Label("diff 布局")
+}
+
+// diffLayoutSwitch 是统一/分栏的全局偏好切换：主 diff 与历史详情都用它，
+// 显式切换即写内存并落盘，所有视图/所有 tab 随即生效。
+func (ws *workspace) diffLayoutSwitch(c *ui.Context) {
+	prefs := ws.diffPrefs()
+	prev := prefs.Layout
+	layoutSwitch(c, &prefs.Layout)
+	if prefs.Layout != prev {
+		ws.app.saveConfig()
+	}
 }
 
 // markdownPreview 是 Markdown 预览的统一容器（diff 预览与文件查看共用）：

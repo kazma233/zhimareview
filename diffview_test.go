@@ -52,6 +52,152 @@ func TestDiffViewAndRevert(t *testing.T) {
 	}, 5*time.Second, "revert did not write baseline content")
 }
 
+// 重扫落地核对打开中的 diff：文件仍在列表时会话保持（滚动/展开/缓冲属于
+// 已打开的内容），文件从列表消失（外部还原/提交）时关闭，主区回到
+// 未选择文件的空态。
+func TestRescanReconcilesOpenDiff(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/base.txt", "base\nchanged\n")
+	write(t, root+"/keep.txt", "keep\n") // 未跟踪改动，列表保持非空
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	var target *git.Change
+	for i := range ws.changes {
+		if ws.changes[i].Path == "base.txt" {
+			target = &ws.changes[i]
+		}
+	}
+	if target == nil {
+		t.Fatalf("changes = %+v, want base.txt", ws.changes)
+	}
+	ws.openDiff(*target)
+	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
+	seq := ws.diffv.seq
+
+	// 原样重扫：文件仍在列表，会话不被重开
+	ws.rescan(root)
+	if ws.diffv.open == nil || ws.diffv.open.Path != "base.txt" {
+		t.Fatalf("open diff = %+v, want base.txt kept", ws.diffv.open)
+	}
+	if ws.diffv.seq != seq || ws.diffv.sides == nil {
+		t.Fatal("unchanged rescan must not restart the open session")
+	}
+
+	// 外部还原 → 重扫后条目消失 → 会话关闭，主区回到空态
+	gitRun(t, root, "checkout", "--", "base.txt")
+	ws.rescan(root)
+	if ws.diffv.open != nil {
+		t.Fatalf("open diff = %+v, want closed after change disappeared", ws.diffv.open)
+	}
+	if len(ws.changes) != 1 || ws.changes[0].Path != "keep.txt" {
+		t.Fatalf("changes = %+v, want only keep.txt", ws.changes)
+	}
+	tt := ui.NewTester(ws.view, 1180, 800)
+	if !tt.HasText("点击左侧文件查看") {
+		t.Errorf("texts = %q, want empty state of no selected file", tt.Texts())
+	}
+}
+
+// 目录入口打开的 diff 改动消失：文件仍在磁盘上时回落只读查看（用户从
+// 目录树来），文件已被删除则回到未选择空态。
+func TestGoneDirDiffFallsBackToFile(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/base.txt", "base\nchanged\n")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	ws.diffPrefs().ShowDiff = true
+
+	ws.openFile(root + "/base.txt") // 目录入口：查看 diff 勾选 → 直接进 diff
+	waitDiffLoaded(t, ws)
+	if ws.diffv.open == nil || !ws.diffv.fromDir {
+		t.Fatalf("dir entry should open diff: %+v", ws.diffv.open)
+	}
+
+	// 外部还原：改动消失但文件还在 → 回落只读查看
+	gitRun(t, root, "checkout", "--", "base.txt")
+	ws.rescan(root)
+	if ws.diffv.open != nil {
+		t.Fatalf("open diff = %+v, want closed", ws.diffv.open)
+	}
+	if ws.dirs.file == nil || ws.dirs.file.abs != root+"/base.txt" {
+		t.Fatalf("main content = %+v, want read-only file view of base.txt", ws.dirs.file)
+	}
+	waitFileLoaded(t, ws)
+
+	// 未跟踪文件被删除：改动与文件都消失 → 回到空态
+	write(t, root+"/temp.txt", "t\n")
+	ws.rescan(root)
+	ws.openDiffFromDir(changeAt(t, ws, "temp.txt"))
+	waitDiffLoaded(t, ws)
+	if err := os.Remove(root + "/temp.txt"); err != nil {
+		t.Fatal(err)
+	}
+	ws.rescan(root)
+	if ws.diffv.open != nil || ws.dirs.file != nil {
+		t.Fatalf("deleted dir file should land empty: diff=%v file=%v",
+			ws.diffv.open != nil, ws.dirs.file != nil)
+	}
+}
+
+// 文件仍在列表但分区被外部改变（终端里 git add / git reset）：打开会话
+// 对齐到新条目——分区徽标、写能力与两侧内容一起跟随。
+func TestExternalStageRepointsOpenDiff(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/base.txt", "base\nchanged\n")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	if len(ws.changes) != 1 || ws.changes[0].Section != "unstaged" {
+		t.Fatalf("changes = %+v, want one unstaged entry", ws.changes)
+	}
+	ws.openDiff(ws.changes[0])
+	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
+	if !ws.diffv.ed.HunkActions {
+		t.Fatal("unstaged diff should offer hunk actions")
+	}
+
+	// 外部暂存 → 重扫对齐到 staged 行：徽标与只读能力跟随
+	gitRun(t, root, "add", "base.txt")
+	ws.rescan(root)
+	if ws.diffv.open == nil || ws.diffv.open.Section != "staged" {
+		t.Fatalf("open diff = %+v, want repointed to staged", ws.diffv.open)
+	}
+	if ws.diffv.ed.HunkActions {
+		t.Error("staged diff must be read-only (no hunk actions)")
+	}
+	if tt := ui.NewTester(ws.view, 1180, 800); !tt.HasText("已暂存") {
+		t.Errorf("texts = %q, want staged header", tt.Texts())
+	}
+
+	// 外部取消暂存 → 回到 unstaged 行；两侧文本与暂存前相同，写能力仍须
+	// 恢复（内容比对早退不能带走分区派生的能力）
+	gitRun(t, root, "reset", "-q", "HEAD", "--", "base.txt")
+	ws.rescan(root)
+	if ws.diffv.open == nil || ws.diffv.open.Section != "unstaged" {
+		t.Fatalf("open diff = %+v, want repointed back to unstaged", ws.diffv.open)
+	}
+	if !ws.diffv.ed.HunkActions {
+		t.Error("unstaged diff must offer hunk actions again")
+	}
+	if tt := ui.NewTester(ws.view, 1180, 800); !tt.HasText("工作区改动") {
+		t.Errorf("texts = %q, want unstaged header", tt.Texts())
+	}
+}
+
 // 暂存切换：diff 头部按钮后改动进入 staged 区。
 func TestStageToggle(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())

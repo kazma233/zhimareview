@@ -23,6 +23,20 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration, msg string) 
 	t.Fatal(msg)
 }
 
+// waitDiffLoaded 等打开的 diff 两侧加载落地。
+func waitDiffLoaded(t *testing.T, ws *workspace) {
+	t.Helper()
+	waitFor(t, func() bool { return ws.diffv.open != nil && !ws.diffv.loading && ws.diffv.sides != nil },
+		5*time.Second, "diff not loaded")
+}
+
+// waitFileLoaded 等只读文件查看加载出文本内容。
+func waitFileLoaded(t *testing.T, ws *workspace) {
+	t.Helper()
+	waitFor(t, func() bool { return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "text" },
+		5*time.Second, "file not loaded")
+}
+
 // gitInit 在 dir 建带基线提交（base.txt）的仓库（main 包测试的本地夹具）。
 func gitInit(t *testing.T, dir string) {
 	t.Helper()

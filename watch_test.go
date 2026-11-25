@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo"
 	"zhimareview/internal/git"
@@ -97,8 +96,9 @@ func TestStructureChanged(t *testing.T) {
 	}
 }
 
-// 事件命中打开中的 diff：内容重载（headless 下 goroutine 同步落地）。
-func TestHandleFsEventsReloadDiff(t *testing.T) {
+// 事件命中打开中的 diff：外部把文件改回基线后条目从模型消失，打开会话
+// 关闭——详情页不再展示已不在列表里的改动（headless 下 goroutine 同步落地）。
+func TestHandleFsEventsClosesGoneDiff(t *testing.T) {
 	root := filepath.ToSlash(t.TempDir())
 	gitInit(t, root)
 	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("base\nv2\n"), 0o644); err != nil {
@@ -111,19 +111,21 @@ func TestHandleFsEventsReloadDiff(t *testing.T) {
 	ws.applyScanState(root, repos, git.CollectChanges(repos))
 	change := ws.changes[0]
 	ws.openDiff(change)
-	waitFor(t, func() bool { return !ws.diffv.loading && ws.diffv.sides != nil }, 5*time.Second, "diff not loaded")
+	if ws.diffv.loading || ws.diffv.sides == nil {
+		t.Fatal("diff not loaded")
+	}
 	if ws.diffv.sides.newValue != "base\nv2\n" {
 		t.Fatalf("initial diff sides = %+v, want v2 content", ws.diffv.sides)
 	}
 
-	// 外部把文件改回基线 → 事件重载 diff
+	// 外部把文件改回基线 → 事件重载后合并清空条目 → 会话关闭
 	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ws.handleFsEvents(root, []string{"base.txt"})
-	waitFor(t, func() bool {
-		return ws.diffv.sides != nil && ws.diffv.sides.newValue == "base\n"
-	}, 5*time.Second, "diff did not reload on fs event")
+	if ws.diffv.open != nil {
+		t.Fatalf("open diff = %+v, want closed after change disappeared", ws.diffv.open)
+	}
 }
 
 // 事件命中仓库 → 管线重采合并：受影响仓库条目被替换、派生行重建

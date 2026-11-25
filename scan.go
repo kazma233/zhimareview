@@ -26,19 +26,46 @@ func (ws *workspace) rescanWith(dir string, done func()) {
 	ws.app.invalidate()
 	loadAsync(ws, func() scanResult {
 		found := git.FindRepos(dir)
-		return scanResult{found: found, changes: git.CollectChanges(found)}
+		r := git.CollectChangesChecked(found)
+		return scanResult{found: found, changes: r.Changes, failed: r.Failed}
 	}, func(r scanResult) {
-		ws.applyScanState(dir, r.found, r.changes)
+		// 读取失败的仓库沿用上一版条目：失败不等于改动消失
+		ws.applyScanState(dir, r.found, carriedChanges(ws.changes, r.found, r.changes, r.failed))
 		if done != nil {
 			done()
 		}
 	})
 }
 
-// scanResult 是 rescan 管线的加载结果（仓库集合 + 全量改动）。
+// scanResult 是 rescan 管线的加载结果（仓库集合 + 全量改动 + 采集失败的
+// 仓库：路径 → 错误）。
 type scanResult struct {
 	found   []git.Repo
 	changes []git.Change
+	failed  map[string]error
+}
+
+// carriedChanges 合并一次扫描结果：读取失败的仓库沿用上一版模型里的
+// 条目——失败不等于没有改动。按 found 的仓库顺序输出；失败仓库已不在
+// 扫描结果里（目录删除）时旧条目一并丢弃。
+func carriedChanges(previous []git.Change, found []git.Repo, fresh []git.Change, failed map[string]error) []git.Change {
+	if len(failed) == 0 {
+		return fresh
+	}
+	byRepo := make(map[string][]git.Change, len(found))
+	for _, c := range fresh {
+		byRepo[c.RepoPath] = append(byRepo[c.RepoPath], c)
+	}
+	for _, c := range previous {
+		if _, bad := failed[c.RepoPath]; bad {
+			byRepo[c.RepoPath] = append(byRepo[c.RepoPath], c)
+		}
+	}
+	out := make([]git.Change, 0, len(fresh)+len(previous))
+	for _, r := range found {
+		out = append(out, byRepo[r.Path]...)
+	}
+	return out
 }
 
 // applyScanState 应用扫描结果；root 已变或已回选择态时丢弃。仓库与改动都
@@ -68,9 +95,17 @@ func (ws *workspace) applyScanState(dir string, found []git.Repo, changes []git.
 		ws.activeRepo = firstRepoWithChanges(found, changes)
 	}
 	if changed {
-		ws.rebuildDerived()
-		ws.dirs.rebuildRows(ws.root, ws.changes)
+		ws.applyChangedModel()
 	}
+}
+
+// applyChangedModel 是改动模型变更后的统一收尾：先重建派生（reconcile
+// 的目录入口回落要按新索引判断文件还有没有改动），再让打开中的 diff
+// 跟随模型，最后重建侧栏行。扫描与 watch 合并两条写入路径共用。
+func (ws *workspace) applyChangedModel() {
+	ws.rebuildDerived()
+	ws.reconcileOpenDiff()
+	ws.dirs.rebuildRows(ws.root, ws.changes)
 }
 
 // rebuildDerived 重建派生数据：模型索引（changeByAbs）与各视图的派生

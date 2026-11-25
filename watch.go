@@ -259,15 +259,19 @@ func (ws *workspace) handleFsEvents(root string, paths []string) {
 			repos = append(repos, r)
 		}
 	}
-	loadAsync(ws, func() []git.Change { return git.CollectChanges(repos) },
-		func(fresh []git.Change) {
+	loadAsync(ws, func() git.CollectChangesResult { return git.CollectChangesChecked(repos) },
+		func(r git.CollectChangesResult) {
 			// 期间已切走（回选择态/换目录）时作废
 			if ws.mode != "work" || ws.root != root {
 				return
 			}
-			if ws.mergeChanges(fresh, scoped) {
-				ws.rebuildDerived()
-				ws.dirs.rebuildRows(ws.root, ws.changes)
+			// 读取失败的仓库沿用上一版条目：从受影响集合里摘掉，合并视为
+			// 未变化——否则瞬态失败会被当成「这个仓库没有改动了」
+			for path := range r.Failed {
+				delete(scoped, path)
+			}
+			if ws.mergeChanges(r.Changes, scoped) {
+				ws.applyChangedModel()
 			}
 		})
 }
