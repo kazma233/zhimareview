@@ -81,6 +81,58 @@ func TestChangesTreeToggle(t *testing.T) {
 	waitFor(t, func() bool { return ws.diffv.open != nil }, 5*time.Second, "leaf click did not open diff")
 }
 
+// 文件行的重复点击契约：点击是瞬时动作（选区归位），同一文件行再点等同
+// 再次打开——已开着也重开（相当于点新文件），会话被关后（外部改动触发
+// reconcileOpenDiff → closeDiff 的空态，行仍选中）再点同样能重新打开。
+func TestChangesTreeReclickReopensDiff(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	if err := os.WriteFile(filepath.Join(root, "base.txt"), []byte("base\nv2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+
+	tt := ui.NewTester(ws.view, 300, 600)
+	tt.Frame()
+	tt.Frame()
+
+	// 首次点击打开
+	if err := tt.Click("base.txt"); err != nil {
+		t.Fatalf("click leaf: %v", err)
+	}
+	waitDiffLoaded(t, ws)
+	seq1 := ws.diffv.seq
+
+	// 已开着再点同一行：重新打开（世代前移），而不是无声无息
+	if err := tt.Click("base.txt"); err != nil {
+		t.Fatalf("re-click leaf: %v", err)
+	}
+	waitDiffLoaded(t, ws)
+	if ws.diffv.seq <= seq1 {
+		t.Fatalf("re-click did not reopen: seq = %d, want > %d", ws.diffv.seq, seq1)
+	}
+	seq2 := ws.diffv.seq
+
+	// 会话被关（行选区还在的脱节状态）后再点：重新打开
+	ws.closeDiff()
+	tt.Frame()
+	if ws.diffv.open != nil {
+		t.Fatal("closeDiff did not close")
+	}
+	if err := tt.Click("base.txt"); err != nil {
+		t.Fatalf("click leaf after close: %v", err)
+	}
+	waitDiffLoaded(t, ws)
+	if ws.diffv.seq <= seq2 {
+		t.Fatalf("click after close did not reopen: seq = %d, want > %d", ws.diffv.seq, seq2)
+	}
+}
+
 // 列表布局的行点击契约：叶子行经条目 id（与树文件行同构）打开对应 diff，
 // 不依赖 flat 下标与行集对齐。
 func TestFlatListClickOpensDiff(t *testing.T) {

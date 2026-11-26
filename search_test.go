@@ -462,10 +462,9 @@ func TestSearchContentHitJumpsInDiff(t *testing.T) {
 	}
 
 	for _, seg := range []int{0, 1} {
-		// 统一/分栏都定位到新侧的行：布局是全局偏好，打开即按它渲染
+		// 统一/分栏都定位到新侧的行：布局是全局偏好，打开即按它渲染。
+		// 同一行直接再点：点击是瞬时动作（选区归位），重复点击重新打开
 		ws.diffPrefs().Layout = seg
-		// 行选区归位：叶子行保留选中，同一行再点不触发点击（treeList 契约）
-		ws.search.selList.sel = -1
 		if err := tt.Click("250 needle here"); err != nil {
 			t.Fatalf("layout %d: click content hit: %v", seg, err)
 		}

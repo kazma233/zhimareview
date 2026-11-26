@@ -463,8 +463,9 @@ func (ws *workspace) renderSearchResults(c *ui.Context) {
 				hitByID[fmt.Sprintf("%s:%d", h.abs, h.line)] = h
 			}
 		}
+		openID := ws.openFileID()
 		if row, ok := treeList(c, &ws.search.selList, "search-list", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() {}, nil)
+			sideRowView(r, rows[r.Index], rows[r.Index].id == openID, func() {}, nil)
 		}); ok {
 			if row.branch {
 				// branch 点击：折叠/展开本树节点（treeList 已把选区归 -1）

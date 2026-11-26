@@ -332,7 +332,8 @@ type changeGroup struct {
 // changeTreePane 是改动侧栏（层级树与列表布局）的视图状态。唯一写点：
 // tree.rebuild/rebuildRows（扫描与合并后）、toggleChange 的收起集合、
 // toggleGroup 的组折叠、渲染帧里的两套选区（selList 经 newSelList 构造，
-// 坑 11 的 -1 起步由 selList 承载；branch/组标题行点击后归 -1 已收进 treeList）。
+// 坑 11 的 -1 起步由 selList 承载；行点击后归 -1 已收进 treeList，选中
+// 高亮按打开中的会话由 openDiffID 给出）。
 type changeTreePane struct {
 	// groups 固定两组，顺序即渲染顺序：已暂存在上、未暂存在下
 	groups [2]changeGroup

@@ -45,10 +45,12 @@ type selList struct {
 func newSelList() selList { return selList{sel: -1} }
 
 // treeList 装配一棵侧栏树：List 原生选区（跟随条目 id，行增删后不漂移）、
-// 键入 label 跳行、行自绘。返回本次点击激活的行：branch 行是瞬时开合动作，
-// 选区已归 -1——已选行的重复点击不会触发 Changed，不归位就永远收不起；
-// ok=false 表示本帧没有点击或选择无效。开合/打开的动作语义各树不同，
-// 由调用方按 row.branch 分发。
+// 键入 label 跳行、行自绘。返回本次点击激活的行：点击是瞬时动作，任何行
+// 处理完选区即归 -1——框架只在选区行变化时给 Changed，选区若停留在行上，
+// 同一行（含文件行）的重复点击永远无声，打开/刷新再也无法触发。ok=false
+// 表示本帧没有点击或选择无效。开合/打开的动作语义各树不同，由调用方按
+// row.branch 分发；选中高亮因此不归 List 选区：调用方按「打开中的会话」
+// 给行传 open（见 sideRowView）。
 func treeList(c *ui.Context, l *selList, key string, rows []sideRow, render func(ui.ListRow)) (sideRow, bool) {
 	l.st.Selected = &l.sel
 	l.st.Key = func(i int) any { return rows[i].id }
@@ -58,17 +60,17 @@ func treeList(c *ui.Context, l *selList, key string, rows []sideRow, render func
 		return sideRow{}, false
 	}
 	row := rows[l.sel]
-	if row.branch || row.header {
-		l.sel = -1
-	}
+	l.sel = -1
 	return row, true
 }
 
 // sideRowView 渲染侧栏树一行：缩进 + 箭头 + 字母列 + 名称 + 计数。
-// 选中高亮画在行上（ListRow.Selected）；branch 行的箭头是行内独立元素，
-// 点击只开合并吃掉该点击（不改变选中，Finder 披露三角语义），开合经 toggle
-// 回到调用方——行点击选中由 List 处理。menu 为 nil 时不挂右键菜单。
-func sideRowView(r ui.ListRow, row sideRow, toggle func(), menu func(m *ui.Menu)) {
+// open 是「该行是打开中的会话」（调用方按 diffv/dirs.file 求得）：高亮跟随
+// 会话而不是点击——选区是瞬时的（treeList），只有点击帧还亮一下
+// （r.Selected）。branch 行的箭头是行内独立元素，点击只开合并吃掉该点击
+// （不改变选中，Finder 披露三角语义），开合经 toggle 回到调用方——行点击
+// 选中由 List 处理。menu 为 nil 时不挂右键菜单。
+func sideRowView(r ui.ListRow, row sideRow, open bool, toggle func(), menu func(m *ui.Menu)) {
 	c := r.Context
 	tk := appTokens(c)
 	// 缩进是行首 spacer 而非行 padding：计数列才能固定贴右缘成对齐的一列
@@ -81,7 +83,7 @@ func sideRowView(r ui.ListRow, row sideRow, toggle func(), menu func(m *ui.Menu)
 	if menu != nil {
 		line.ContextMenu(menu)
 	}
-	if r.Selected() {
+	if r.Selected() || open {
 		line.Background(tk.Selection)
 	} else if row.header {
 		// 组标题用底色与文件行区分，行高与左右边距保持一致，两个分组在

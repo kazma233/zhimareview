@@ -306,6 +306,27 @@ func (ws *workspace) sidebarView(c *ui.Context) {
 	})
 }
 
+// openDiffID 是 diff 列表里打开中的会话所在行的 id；openFileID 是目录树与
+// 搜索结果里的（只读文件查看，或「查看 diff」分流出的目录入口 diff）。行
+// 高亮跟随打开中的会话而不跟随点击——点击选区是瞬时的（treeList），高亮
+// 若由选区承载，会话在别处被关（reconcile）后就成了无会话的幽灵选中。
+func (ws *workspace) openDiffID() string {
+	if ws.diffv.open == nil {
+		return ""
+	}
+	return fileID(*ws.diffv.open)
+}
+
+func (ws *workspace) openFileID() string {
+	if ws.dirs.file != nil {
+		return ws.dirs.file.abs
+	}
+	if ws.diffv.open != nil && ws.diffv.fromDir {
+		return ws.diffv.target()
+	}
+	return ""
+}
+
 // renderSidebarContent 按侧栏模式渲染主体。两个 tab、三种布局（目录树 /
 // 改动层级树 / 改动列表）都是同一模式：拍平行 + 原生 List（treeList +
 // sideRowView），差别只在数据适配与选中动作。
@@ -316,8 +337,9 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 			emptyState(c, "加载中…", "")
 		default:
 			rows := ws.dirs.rows
+			openID := ws.openFileID()
 			if row, ok := treeList(c, &ws.dirs.list, "dir-tree", rows, func(r ui.ListRow) {
-				sideRowView(r, rows[r.Index], func() { ws.toggleDir(rows[r.Index].id) },
+				sideRowView(r, rows[r.Index], rows[r.Index].id == openID, func() { ws.toggleDir(rows[r.Index].id) },
 					ws.rowMenu(r.Context, rows[r.Index]))
 			}); ok {
 				if row.branch {
@@ -339,8 +361,9 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 		emptyState(c, "无改动", "")
 	case ws.tree.layout:
 		rows := ws.tree.flatRows
+		openID := ws.openDiffID()
 		if row, ok := treeList(c, &ws.tree.flatList, "flat-list", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() {}, ws.rowMenu(r.Context, rows[r.Index]))
+			sideRowView(r, rows[r.Index], rows[r.Index].id == openID, func() {}, ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
 			// 列表布局只有组标题与叶子行；文件行 id 与树文件行同 id（fileID），
 			// 经 tree.index 取改动，不依赖 flat 下标与行集对齐
@@ -352,8 +375,9 @@ func (ws *workspace) renderSidebarContent(c *ui.Context) {
 		}
 	default:
 		rows := ws.tree.rows
+		openID := ws.openDiffID()
 		if row, ok := treeList(c, &ws.tree.list, "changes-tree", rows, func(r ui.ListRow) {
-			sideRowView(r, rows[r.Index], func() { ws.toggleChange(rows[r.Index].id) },
+			sideRowView(r, rows[r.Index], rows[r.Index].id == openID, func() { ws.toggleChange(rows[r.Index].id) },
 				ws.rowMenu(r.Context, rows[r.Index]))
 		}); ok {
 			switch {
