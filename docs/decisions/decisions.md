@@ -444,10 +444,19 @@
   （不碰 workspace 状态），结果交 apply 在主线程落地；headless 整条同步。
   新的后台加载/写操作一律走它，不再手写 goroutine + win.Update；多返回值
   的加载用小结果结构体打包。
+- `zoomImageView(c, bm, zoom, handle, label)` + `imageZoom`：可交互图片。
+  官方 `ui.Image` 只做静态适配展示、`ui/mobile.Zoomable` 面向双指触摸，
+  桌面滚轮缩放按官方 `zoom_test.go` 的 HandleInput 模式组装（仍是官方
+  原语：HandleInput/Draw/Painter.ImageRegion/Clip，不自绘渲染）。滚轮/捏合
+  缩放、拖拽/触控板平移、双击重置、方向键/+−/0；`imageZoom` 归调用方持有，
+  传同一指针即联动（diff 并排两列）。视口尺寸由 Draw 写入（build 期布局
+  滞后一 pass，首帧事件会被吞——实抓）。
 
 ## 显式偏差（README 亦列出）
 
 - diff 上下文默认折叠（官方视图行为，点击分隔条展开）。
+- 聚焦：打开文本/图片/diff 自动把键盘焦点送进内容区；滚轮/触控板始终跟随
+  指针位置（命中即滚，与浏览器一致），不跟随焦点。
 - heic 图片不支持（MyGo `DecodeBitmap` 支持 PNG/JPEG/GIF/WebP/BMP）。
 - Markdown 链接点击行为按官方组件默认（http/https/mailto 打开）。
 - pull 默认只允许快进，分叉时需勾选 rebase 或外部处理。

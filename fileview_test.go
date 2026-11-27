@@ -237,3 +237,195 @@ func TestDirShowDiffRetarget(t *testing.T) {
 		t.Errorf("changes-tab diff should stay open: diff=%v file=%v", ws.diffv.open != nil, ws.dirs.file != nil)
 	}
 }
+
+// 只读图片预览的缩放与聚焦：打开请求把键盘焦点送进图片（无需先点一下），
+// 方向键直接平移；滚轮放大；同内容 watch 重读保留缩放。
+func TestFileImageZoom(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	writePNG(t, root, "pic.png", pngBytes(t, 0, 128, 255))
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.openFile(root + "/pic.png")
+	waitFor(t, func() bool {
+		return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "image"
+	}, 5*time.Second, "image not loaded")
+
+	// 焦点随绑定在同一帧落地；视口尺寸由绘制写入，之后交互即可用
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	tt.Frame()
+	if !tt.Focused("图片预览") {
+		t.Fatal("opening an image must focus it without an extra click")
+	}
+	// 先放大再平移：适配态（scale=1）平移被钳回居中
+	tt.Wheel(600, 400, 0, -40)
+	if ws.dirs.file.imgZoom.scale <= 1 {
+		t.Fatalf("wheel should zoom the image, scale = %v", ws.dirs.file.imgZoom.scale)
+	}
+	tt.Key(0, ui.KeyDown) // 焦点已在图片：方向键直接平移
+	if v := ws.dirs.file.imgZoom.y; v >= 0 {
+		t.Fatalf("arrow key should pan the focused image, y = %v", v)
+	}
+
+	// 同内容重读（watch 命中）：缩放保留，不闪回适配态
+	ws.reloadOpenFile()
+	waitFor(t, func() bool { return ws.dirs.file != nil && !ws.dirs.file.loading }, 5*time.Second, "reload not done")
+	if ws.dirs.file.imgZoom.scale <= 1 {
+		t.Fatal("same-content reload must keep the zoom")
+	}
+
+	// 焦点被移走后，同内容重读不得抢回（Tab 自证焦点确实离开）
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	if tt.Focused("图片预览") {
+		t.Skip("Tab did not move focus away in this view; reload-steal not observable")
+	}
+	ws.reloadOpenFile()
+	waitFor(t, func() bool { return ws.dirs.file != nil && !ws.dirs.file.loading }, 5*time.Second, "reload not done")
+	tt.Frame()
+	tt.Frame()
+	if tt.Focused("图片预览") {
+		t.Fatal("same-content reload stole the focus back to the image")
+	}
+}
+
+// 只读文本查看：打开请求同样把焦点送进内容区（edHandle 绑官方编辑器的
+// 可聚焦元素），方向键直接移动光标，无需先点一下。
+func TestFileTextFocusOnOpen(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	write(t, root+"/note.txt", "one\ntwo\nthree\n")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.openFile(root + "/note.txt")
+	waitFileLoaded(t, ws)
+
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	tt.Frame()
+	if !ws.dirs.file.ed.Focused() {
+		t.Fatal("opening a text file must focus the editor without an extra click")
+	}
+	before := ws.dirs.file.ed.Cursor()
+	tt.Key(0, ui.KeyDown)
+	if ws.dirs.file.ed.Cursor() == before {
+		t.Fatal("arrow key must move the cursor of the focused editor")
+	}
+
+	// 焦点被移走后，同内容重读不得抢回光标（Tab 自证焦点确实离开）
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	cursor := ws.dirs.file.ed.Cursor()
+	tt.Key(0, ui.KeyDown)
+	if ws.dirs.file.ed.Cursor() != cursor {
+		t.Skip("Tab did not move focus away in this view; reload-steal not observable")
+	}
+	ws.reloadOpenFile()
+	waitFor(t, func() bool { return ws.dirs.file != nil && !ws.dirs.file.loading }, 5*time.Second, "reload not done")
+	tt.Frame()
+	tt.Frame()
+	tt.Key(0, ui.KeyDown)
+	if ws.dirs.file.ed.Cursor() != cursor {
+		t.Fatal("same-content reload stole the focus back to the editor")
+	}
+}
+
+// 打开图片后的第一次交互必须生效，且连续打开第二张同样生效：图片出现那一帧
+// 的 build 期布局还读不到尺寸，事件期必须用绘制后写入的视口（回归：曾用
+// build 期 Bounds 缓存，首次滚轮/按键被静默吞掉——实抓于真实时序）。
+func TestFileImageFirstEventAfterOpen(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	writePNG(t, root, "a.png", pngBytes(t, 255, 0, 0))
+	writePNG(t, root, "b.png", pngBytes(t, 0, 255, 0))
+
+	// 真实窗口时序：load 在后台、apply 经主线程队列落地
+	q := &testQueue{}
+	ws := newWorkspace(nil)
+	ws.post = q.post
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	tt.Frame()
+	if err := tt.Click("目录列表"); err != nil {
+		t.Fatalf("click dir tab: %v", err)
+	}
+	tt.Frame()
+	for i := 0; i < 5; i++ { // 目录树懒加载
+		q.drain()
+		tt.Frame()
+	}
+
+	open := func(name string) {
+		t.Helper()
+		if err := tt.Click(name); err != nil {
+			t.Fatalf("click %s: %v", name, err)
+		}
+		tt.Frame() // 点击落地：openFileAt 在本次 build 触发
+		waitFor(t, func() bool { return q.pending() > 0 }, 5*time.Second, name+" apply not queued")
+		q.drain() // applyFile（对应真实窗口的 win.Update）
+		tt.Frame() // 图片出现的那一帧，之后立刻交互
+		waitFor(t, func() bool {
+			return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "image"
+		}, 5*time.Second, name+" not loaded")
+		if !tt.Focused("图片预览") {
+			t.Fatalf("%s: image not focused on open", name)
+		}
+	}
+
+	open("a.png")
+	tt.Wheel(600, 300, 0, -40) // 第一张的第一次滚轮
+	if ws.dirs.file.imgZoom.scale <= 1 {
+		t.Fatalf("first gesture after opening a.png was swallowed: scale=%v", ws.dirs.file.imgZoom.scale)
+	}
+
+	open("b.png")
+	tt.Wheel(600, 300, 0, -40) // 第二张的第一次滚轮
+	if ws.dirs.file.imgZoom.scale <= 1 {
+		t.Fatalf("first gesture after opening b.png was swallowed: scale=%v", ws.dirs.file.imgZoom.scale)
+	}
+	y := ws.dirs.file.imgZoom.y
+	tt.Key(0, ui.KeyDown)
+	if ws.dirs.file.imgZoom.y >= y {
+		t.Fatalf("arrow key after opening b.png did not pan: y %v -> %v", y, ws.dirs.file.imgZoom.y)
+	}
+}
+
+// 打开不支持的文件时，聚焦请求就地作废：之后 watch 重读恰好解码成功，
+// 不得把焦点突然抢进内容区（久远的打开请求不属于当前会话）。
+func TestFileUnsupportedDoesNotStealFocusLater(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	// 扩展名是图片、内容解不出来：先落到 unsupported，聚焦请求随之作废
+	write(t, root+"/pic.png", "v1\x00not-a-png")
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	ws.openFile(root + "/pic.png")
+	waitFor(t, func() bool {
+		return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "unsupported"
+	}, 5*time.Second, "unsupported file not loaded")
+
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	tt.Frame()
+
+	// 磁盘内容改成合法 PNG：重读解码成功，但不该抢焦点
+	writePNG(t, root, "pic.png", pngBytes(t, 0, 200, 0))
+	ws.reloadOpenFile()
+	waitFor(t, func() bool {
+		return ws.dirs.file != nil && !ws.dirs.file.loading && ws.dirs.file.kind == "image"
+	}, 5*time.Second, "file did not turn into an image")
+	tt.Frame()
+	tt.Frame()
+	if tt.Focused("图片预览") {
+		t.Fatal("a long-consumed open request must not steal focus on a later reload")
+	}
+}

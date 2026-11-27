@@ -1,14 +1,43 @@
 package main
 
 import (
+	"bytes"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"zhimareview/internal/git"
 )
+
+// pngBytes 生成一张 2×2 纯色 PNG（图片夹具）：不同色值内容可区分。
+func pngBytes(t *testing.T, r, g, b uint8) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	for y := 0; y < 2; y++ {
+		for x := 0; x < 2; x++ {
+			img.Set(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// writePNG 在 root 下写一张图片文件（夹具）。
+func writePNG(t *testing.T, root, name string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, name), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // diff 流程：真仓库夹具 → 打开 diff → 头部与两侧内容 → 还原 hunk 落盘。
 func TestDiffViewAndRevert(t *testing.T) {
@@ -336,5 +365,320 @@ func TestLoadSidesStagedRename(t *testing.T) {
 	if sides.binary || sides.oldValue != "moved\n" || sides.newValue != "moved\n" {
 		t.Fatalf("sides = old %q new %q binary %v, want both sides moved",
 			sides.oldValue, sides.newValue, sides.binary)
+	}
+}
+
+// 打开文本 diff 焦点进官方编辑器：方向键直接移动光标，无需先点一下
+//（DiffState 无聚焦查询 API，用光标行为断言——滚动受视口余量影响不稳）。
+func TestDiffTextFocusesEditor(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/base.txt", "changed\n"+strings.Repeat("pad\n", 40))
+
+	ws := newWorkspace(nil)
+	ws.mode = "work"
+	ws.root = root
+	repos := git.FindRepos(root)
+	ws.applyScanState(root, repos, git.CollectChanges(repos))
+	ws.openDiff(ws.changes[0])
+	waitDiffLoaded(t, ws)
+
+	tt := ui.NewTester(ws.view, 1180, 800)
+	tt.Frame()
+	tt.Frame()
+	cursor0 := ws.diffv.ed.Cursor()
+	for i := 0; i < 5; i++ {
+		tt.Key(0, ui.KeyDown)
+	}
+	if ws.diffv.ed.Cursor() == cursor0 {
+		t.Fatal("arrow keys never reached the editor: focus did not land on open")
+	}
+	// 焦点被移走后，同内容重读不得抢回。编辑器标签随系统语言（Code
+	// editor），先用「Tab 后方向键不再推动光标」自证焦点确实离开了
+	tt.Key(0, ui.KeyTab)
+	tt.Frame()
+	moved := ws.diffv.ed.Cursor()
+	tt.Key(0, ui.KeyDown)
+	if ws.diffv.ed.Cursor() != moved {
+		t.Skip("Tab did not move focus away in this view; reload-steal not observable")
+	}
+	cursor1 := ws.diffv.ed.Cursor()
+	ws.reloadDiff()
+	tt.Frame()
+	tt.Frame()
+	for i := 0; i < 3; i++ {
+		tt.Key(0, ui.KeyDown)
+	}
+	if ws.diffv.ed.Cursor() != cursor1 {
+		t.Fatal("same-content reload stole the focus back to the editor")
+	}
+}
+
+// 图片 diff 的两侧字节按分区语义取：unstaged 旧=index/新=工作区、staged
+// 旧=HEAD/新=index（不是工作区字节——旧实现只读工作区，staged 显示错版本、
+// 删除的图片完全看不到）、untracked 仅新侧。
+func TestLoadSidesImageBytes(t *testing.T) {
+	red, green, blue := pngBytes(t, 255, 0, 0), pngBytes(t, 0, 255, 0), pngBytes(t, 0, 0, 255)
+	committed := func(t *testing.T, root string, data []byte) {
+		t.Helper()
+		writePNG(t, root, "pic.png", data)
+		gitRun(t, root, "add", ".")
+		gitRun(t, root, "commit", "-m", "base")
+	}
+	scan := func(t *testing.T, root string) []git.Change {
+		t.Helper()
+		changes := git.CollectChanges(git.FindRepos(root))
+		if len(changes) != 1 {
+			t.Fatalf("changes = %+v, want exactly one entry", changes)
+		}
+		return changes
+	}
+
+	t.Run("unstaged 修改", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		committed(t, root, red)
+		writePNG(t, root, "pic.png", green)
+
+		sides := loadSides(scan(t, root)[0])
+		if !sides.binary || !bytes.Equal(sides.binOld, red) || !bytes.Equal(sides.binNew, green) {
+			t.Fatalf("sides binary=%v old=%v new=%v, want old=red new=green",
+				sides.binary, sides.binOld, sides.binNew)
+		}
+	})
+
+	t.Run("staged 修改取 index 版本", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		committed(t, root, red)
+		writePNG(t, root, "pic.png", green)
+		gitRun(t, root, "add", "pic.png")
+		writePNG(t, root, "pic.png", blue) // 工作区再改：staged diff 与工作区无关
+
+		changes := git.CollectChanges(git.FindRepos(root))
+		// 工作区再改后 staged 与 unstaged 两条并存，挑 staged 条目
+		var staged *git.Change
+		for i := range changes {
+			if changes[i].Section == "staged" {
+				staged = &changes[i]
+			}
+		}
+		if staged == nil {
+			t.Fatalf("changes = %+v, want a staged entry", changes)
+		}
+		sides := loadSides(*staged)
+		if !sides.binary || !bytes.Equal(sides.binOld, red) || !bytes.Equal(sides.binNew, green) {
+			t.Fatalf("sides binary=%v old=%v new=%v, want old=red new=index green (not worktree blue)",
+				sides.binary, sides.binOld, sides.binNew)
+		}
+	})
+
+	t.Run("unstaged 删除保留旧图", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		committed(t, root, red)
+		if err := os.Remove(filepath.Join(root, "pic.png")); err != nil {
+			t.Fatal(err)
+		}
+
+		sides := loadSides(scan(t, root)[0])
+		if !sides.binary || !bytes.Equal(sides.binOld, red) || len(sides.binNew) != 0 {
+			t.Fatalf("sides binary=%v old=%v new=%v, want old=red new empty",
+				sides.binary, sides.binOld, sides.binNew)
+		}
+	})
+
+	t.Run("untracked 仅新侧", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		writePNG(t, root, "pic.png", green)
+
+		changes := scan(t, root)
+		if changes[0].Section != "untracked" {
+			t.Fatalf("changes = %+v, want one untracked entry", changes)
+		}
+		sides := loadSides(changes[0])
+		if !sides.binary || len(sides.binOld) != 0 || !bytes.Equal(sides.binNew, green) {
+			t.Fatalf("sides binary=%v old=%v new=%v, want old empty new=green",
+				sides.binary, sides.binOld, sides.binNew)
+		}
+	})
+}
+
+// 图片 diff 的落地与渲染：applyDiffState 解码两侧 bitmap、sidesContentEqual
+// 对两侧字节生效；渲染两侧出两列、删除只剩旧侧列、非图片二进制维持
+// 「二进制文件」空态，且图片 diff 头部不渲染统一/分栏布局开关。
+func TestDiffImageSidesRender(t *testing.T) {
+	red, green := pngBytes(t, 255, 0, 0), pngBytes(t, 0, 255, 0)
+
+	t.Run("解码与相等比对", func(t *testing.T) {
+		ws := newWorkspace(nil)
+		ws.mode = "work"
+		v := git.Change{RepoPath: "D:/repos/a", Path: "pic.png", Section: "unstaged", Code: "M"}
+		ws.diffv.open = &v
+		ws.diffv.seq = 1
+		ws.applyDiffState(1, v, &diffSides{binary: true, binOld: red, binNew: green})
+		if !sidesContentEqual(ws.diffv.sides, &diffSides{binary: true, binOld: red, binNew: green}) {
+			t.Fatal("identical binary sides must compare equal")
+		}
+		if sidesContentEqual(ws.diffv.sides, &diffSides{binary: true, binOld: green, binNew: green}) {
+			t.Fatal("different binOld must compare unequal")
+		}
+
+		// 内容变化归位图片缩放；同内容重放（watch 重读）早退保持
+		ws.diffv.imgZoom.scale = 3
+		ws.applyDiffState(1, v, &diffSides{binary: true, binOld: green, binNew: red})
+		if ws.diffv.imgZoom.scale != 1 {
+			t.Fatal("content change must reset image zoom")
+		}
+		ws.diffv.imgZoom.scale = 3
+		ws.applyDiffState(1, v, &diffSides{binary: true, binOld: green, binNew: red})
+		if ws.diffv.imgZoom.scale != 3 {
+			t.Fatal("same-content reapply must keep image zoom")
+		}
+	})
+
+	t.Run("两侧并排", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		writePNG(t, root, "pic.png", red)
+		gitRun(t, root, "add", ".")
+		gitRun(t, root, "commit", "-m", "base")
+		writePNG(t, root, "pic.png", green)
+
+		ws := newWorkspace(nil)
+		ws.mode = "work"
+		ws.root = root
+		repos := git.FindRepos(root)
+		ws.applyScanState(root, repos, git.CollectChanges(repos))
+		if len(ws.changes) != 1 {
+			t.Fatalf("changes = %+v, want exactly one entry", ws.changes)
+		}
+		ws.openDiff(ws.changes[0])
+		waitDiffLoaded(t, ws)
+
+		tt := ui.NewTester(ws.view, 1180, 800)
+		if !tt.HasText("旧版") || !tt.HasText("新版") {
+			t.Errorf("texts = %q, want both side labels", tt.Texts())
+		}
+		if tt.HasText("二进制文件") {
+			t.Errorf("texts = %q, binary empty state must be gone", tt.Texts())
+		}
+		if tt.HasText("分栏") {
+			t.Errorf("texts = %q, layout switch must hide for image diff", tt.Texts())
+		}
+		// 尺寸·大小信息随列头展示（解码成功才有）
+		sizeShown := false
+		for _, s := range tt.Texts() {
+			if strings.Contains(s, "×") && strings.Contains(s, "·") {
+				sizeShown = true
+			}
+		}
+		if !sizeShown {
+			t.Errorf("texts = %q, want size · bytes info", tt.Texts())
+		}
+		// 滚轮落在任一列都缩放同一份状态（两列联动）：先在新版列、再在旧版列
+		tt.Frame()
+		tt.Frame()
+		tt.Wheel(800, 400, 0, -40) // 新版列
+		if ws.diffv.imgZoom.scale <= 1 {
+			t.Errorf("wheel over the new pane should zoom the shared state, scale = %v", ws.diffv.imgZoom.scale)
+		}
+		mark := ws.diffv.imgZoom.scale
+		tt.Wheel(400, 400, 0, -40) // 旧版列
+		if ws.diffv.imgZoom.scale <= mark {
+			t.Errorf("wheel over the old pane should zoom the shared state, scale %v -> %v", mark, ws.diffv.imgZoom.scale)
+		}
+		// 打开请求把焦点送进新版列：键盘无需点击即可缩放（联动状态）
+		if !tt.Focused("新版图片") {
+			t.Errorf("focus = %v, want the new-image pane focused on open", tt.Focused("新版图片"))
+		}
+		before := ws.diffv.imgZoom.scale
+		tt.Key(0, ui.KeyEqual)
+		if ws.diffv.imgZoom.scale <= before {
+			t.Error("keyboard + should zoom the focused image pane")
+		}
+	})
+
+	t.Run("删除仅旧侧", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		writePNG(t, root, "pic.png", red)
+		gitRun(t, root, "add", ".")
+		gitRun(t, root, "commit", "-m", "base")
+		if err := os.Remove(filepath.Join(root, "pic.png")); err != nil {
+			t.Fatal(err)
+		}
+
+		ws := newWorkspace(nil)
+		ws.mode = "work"
+		ws.root = root
+		repos := git.FindRepos(root)
+		ws.applyScanState(root, repos, git.CollectChanges(repos))
+		if len(ws.changes) != 1 {
+			t.Fatalf("changes = %+v, want exactly one entry", ws.changes)
+		}
+		ws.openDiff(ws.changes[0])
+		waitDiffLoaded(t, ws)
+
+		tt := ui.NewTester(ws.view, 1180, 800)
+		if !tt.HasText("旧版") {
+			t.Errorf("texts = %q, want old side label", tt.Texts())
+		}
+		if tt.HasText("新版") {
+			t.Errorf("texts = %q, deleted image must not show new side", tt.Texts())
+		}
+		// 焦点 Handle 必须绑到实际渲染的旧版列：否则打开请求的聚焦永远
+		// 悬空（只绑新版列的旧实现如此）
+		tt.Frame()
+		tt.Frame()
+		if !tt.Focused("旧版图片") {
+			t.Error("deleted-image diff must focus the old pane on open")
+		}
+	})
+
+	t.Run("非图片二进制维持空态", func(t *testing.T) {
+		root := filepath.ToSlash(t.TempDir())
+		gitInit(t, root)
+		write(t, root+"/data.bin", "v1\x00binary")
+		gitRun(t, root, "add", ".")
+		gitRun(t, root, "commit", "-m", "base")
+		write(t, root+"/data.bin", "v2\x00changed")
+
+		ws := newWorkspace(nil)
+		ws.mode = "work"
+		ws.root = root
+		repos := git.FindRepos(root)
+		ws.applyScanState(root, repos, git.CollectChanges(repos))
+		if len(ws.changes) != 1 {
+			t.Fatalf("changes = %+v, want exactly one entry", ws.changes)
+		}
+		ws.openDiff(ws.changes[0])
+		waitDiffLoaded(t, ws)
+
+		tt := ui.NewTester(ws.view, 1180, 800)
+		if tt.HasText("旧版") || !tt.HasText("二进制文件") {
+			t.Errorf("texts = %q, want binary empty state without side labels", tt.Texts())
+		}
+	})
+}
+
+// 旧侧对象路径统一按 OrigPath 取（与 staged 分支同口径）。porcelain v1
+// 目前对工作区改名报 D + untracked 而非 R，所以这里用合成的 Change 固定
+// 规则：status 口径变化或条目来源扩展时，旧侧不会凭空丢内容。
+func TestLoadSidesOldPathFromOrigPath(t *testing.T) {
+	root := filepath.ToSlash(t.TempDir())
+	gitInit(t, root)
+	write(t, root+"/a.txt", "moved\n")
+	gitRun(t, root, "add", ".")
+	gitRun(t, root, "commit", "-m", "base")
+	// 只在磁盘上改名（未暂存）：index 仍指旧路径
+	if err := os.Rename(filepath.Join(root, "a.txt"), filepath.Join(root, "b.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	text := loadSides(git.Change{RepoPath: root, Path: "b.txt", OrigPath: "a.txt", Section: "unstaged", Code: "R"})
+	if text.oldValue != "moved\n" || text.newValue != "moved\n" {
+		t.Fatalf("text sides = old %q new %q, want both from old path/index", text.oldValue, text.newValue)
 	}
 }

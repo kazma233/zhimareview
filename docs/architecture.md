@@ -16,10 +16,10 @@ remote.go            fetch/pull/全部 fetch 的编排、进度模态与错误�
 tabbar.go            自绘标题栏 tab 条（TabsBase + ×/＋ + 拖拽排序 + 颜色/重命名 + DragWindow）
 errdialog.go         错误弹窗：标题 + 可滚动正文 + 复制/关闭
 dialog.go            通用模态骨架：标题/副标题、分隔线、正文与底部动作、默认宽度与间距
-widgets.go           复用组件：tapRow/badge/emptyState 与侧栏树三件套 sideRow/sideRowView/treeList
+widgets.go           复用组件：tapRow/badge/emptyState、侧栏树三件套 sideRow/sideRowView/treeList、可缩放图片 zoomImageView（imageZoom 状态归调用方，多视图共享即联动；Focusable+键盘+Handle.Bind 供打开请求聚焦）
 search.go            侧栏全局搜索（文件名/目录名/内容）
 sidebar.go           改动树构建（分区组、跨仓库折叠、状态色继承）与列表排序
-diffview.go          diff 视图接入（editor.DiffView + 落盘还原）与写操作编排
+diffview.go          diff 视图接入（editor.DiffView + 落盘还原）、图片两侧并排对比与写操作编排
 history.go           提交历史数据与管线（加载、分页、世代、筛选、详情、revert）
 historyview.go       提交历史页渲染（列表/表头/行/分支状态/提交详情 diff）
 repopicker.go        历史页仓库下拉（分支/ahead-behind 展示与过滤）

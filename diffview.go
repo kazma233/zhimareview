@@ -12,37 +12,64 @@ import (
 	"zhimareview/internal/git"
 )
 
-// diffSides 是一个改动文件的两侧文本；binary 时内容为空（binData 带工作区当前版本字节供图片预览）。
+// diffSides 是一个改动文件的两侧文本；binary 时文本为空（binOld/binNew
+// 带两侧字节供图片对比，非图片二进制两侧为空）。
 type diffSides struct {
 	oldValue string
 	newValue string
 	binary   bool
-	binData  []byte
+	binOld   []byte
+	binNew   []byte
 }
 
-// sidesContentEqual 判断两侧内容是否一致（含二进制的工作区字节）；任一
+// sidesContentEqual 判断两侧内容是否一致（含二进制的两侧字节）；任一
 // 侧未加载视为不等——equality 只对「已应用 vs 重读」这一组有意义。
 func sidesContentEqual(a, b *diffSides) bool {
 	if a == nil || b == nil {
 		return false
 	}
 	return a.binary == b.binary && a.oldValue == b.oldValue &&
-		a.newValue == b.newValue && bytes.Equal(a.binData, b.binData)
+		a.newValue == b.newValue && bytes.Equal(a.binOld, b.binOld) &&
+		bytes.Equal(a.binNew, b.binNew)
 }
 
 // loadSides 读取一个改动的两侧文本：
 // unstaged 用 index 对工作区，staged 用 HEAD 对 index，untracked 直接看工作区。
-// 二进制时读取工作区当前版本字节，供图片预览。
+// 二进制图片时读取两侧字节（旧侧从 git 对象取，新侧取工作区），供并排对比。
 func loadSides(v git.Change) *diffSides {
 	s := &diffSides{}
-	fillBinary := func() {
-		s.binary = true
-		// 图片扩展名时带工作区当前版本字节，diff 视图可预览
-		if isImagePath(v.Path) {
-			if data, err := os.ReadFile(changeAbs(v)); err == nil {
-				s.binData = data
-			}
+	// oldPath 是旧侧在 git 对象里的路径：改名/复制的旧内容在 OrigPath。
+	// porcelain v1 目前不在工作区侧报 R（拆成 D + untracked），unstaged
+	// 分支通常等于 Path；统一口径，口径变化时旧侧仍正确
+	oldPath := v.Path
+	if v.OrigPath != "" {
+		oldPath = v.OrigPath
+	}
+	// showObjectBytes 读对象字节：ShowObject 的 string 经 Run 的 bytes.Buffer
+	// 原样保留二进制内容，转换无损，不为此加 git 包的 []byte 变体
+	showObjectBytes := func(rev, path string) []byte {
+		out, found, err := git.ShowObject(v.RepoPath, rev, path)
+		if err != nil || !found {
+			return nil
 		}
+		return []byte(out)
+	}
+	// fillBinary 只给图片扩展名带字节：非图片二进制维持「二进制文件」空态。
+	// 两侧都按分区语义取——staged 是 HEAD 对 index（旧侧在 HEAD，新侧在
+	// index 而非工作区），unstaged 是 index 对工作区（旧侧在 index，删除时
+	// 工作区无文件新侧为空）。worktree 是工作区当前内容（nil=不可读或不适用）
+	fillBinary := func(worktree []byte) {
+		s.binary = true
+		if !isImagePath(v.Path) {
+			return
+		}
+		if v.Section == "staged" {
+			s.binOld = showObjectBytes("HEAD", oldPath)
+			s.binNew = showObjectBytes(":0", v.Path)
+			return
+		}
+		s.binOld = showObjectBytes(":0", oldPath)
+		s.binNew = worktree
 	}
 	switch v.Section {
 	case "untracked":
@@ -50,9 +77,9 @@ func loadSides(v git.Change) *diffSides {
 		if err != nil || !found {
 			return s
 		}
-		// 未跟踪文件没有 diff 可问，直接看内容里有没有 NUL
+		// 未跟踪文件没有 diff 可问，直接看内容里有没有 NUL；新侧即工作区内容
 		if isBinary(content) {
-			fillBinary()
+			fillBinary([]byte(content))
 			return s
 		}
 		s.newValue = content
@@ -63,15 +90,11 @@ func loadSides(v git.Change) *diffSides {
 			s.binary = false
 		}
 		if s.binary {
-			fillBinary()
+			fillBinary(nil)
 			return s
 		}
 		// 新文件暂存后 HEAD 没有该对象，旧侧为空；改名/复制的旧内容在
 		// 旧路径（HEAD:OrigPath），新侧按现路径取
-		oldPath := v.Path
-		if v.OrigPath != "" {
-			oldPath = v.OrigPath
-		}
 		s.oldValue, _, _ = git.ShowObject(v.RepoPath, "HEAD", oldPath)
 		s.newValue, _, _ = git.ShowObject(v.RepoPath, ":0", v.Path)
 		return s
@@ -81,10 +104,11 @@ func loadSides(v git.Change) *diffSides {
 			s.binary = false
 		}
 		if s.binary {
-			fillBinary()
+			data, _ := os.ReadFile(changeAbs(v)) // 删除时不存在，新侧留空
+			fillBinary(data)
 			return s
 		}
-		s.oldValue, _, _ = git.ShowObject(v.RepoPath, ":0", v.Path)
+		s.oldValue, _, _ = git.ShowObject(v.RepoPath, ":0", oldPath)
 		content, found, err := git.ReadWorktreeFile(v.RepoPath, v.Path)
 		if err == nil && found {
 			s.newValue = content
@@ -115,7 +139,18 @@ type diffPane struct {
 	seq     int
 	loading bool
 	sides   *diffSides
-	bitmap  *ui.Bitmap // 二进制图片的解码结果
+	// bitmapOld/bitmapNew 是二进制图片两侧的解码结果（nil=该侧无字节或
+	// 解码失败，渲染时按占位提示处理）
+	bitmapOld *ui.Bitmap
+	bitmapNew *ui.Bitmap
+	// imgZoom 是图片对比两列共享的缩放/平移状态（两列传同一指针即联动）；
+	// 内容变化时在 applyDiffState 归位
+	imgZoom imageZoom
+	// zoomHandle 绑定新版图片列（一个 Handle 只能绑一个控件，旧版列靠
+	// 点击聚焦），打开请求借此把键盘焦点送进内容区；focusPending 标记
+	// 这次打开还没落过焦点（watch 同内容重读不重复抢）
+	zoomHandle   ui.Handle
+	focusPending bool
 	// expand 是当前打开 diff 的展开态：打开时取全局偏好（diffPrefs().Expand），
 	// 头部「展开未修改」开关翻转后写回全局偏好并落盘
 	expand bool
@@ -195,6 +230,9 @@ func (ws *workspace) openDiffAs(v git.Change, line int) {
 	ws.diffv.loading = true
 	ws.diffv.sides = nil
 	ws.diffv.jumpLine = line
+	// 焦点随打开请求进内容区：落地后由 applyDiffState 消费（图片给图片
+	// 列，文本给官方 diff 编辑器）
+	ws.diffv.focusPending = true
 
 	loadAsync(ws, func() *diffSides { return loadSides(v) },
 		func(sides *diffSides) { ws.applyDiffState(seq, v, sides) })
@@ -216,21 +254,44 @@ func (ws *workspace) applyDiffState(seq int, v git.Change, sides *diffSides) {
 	}
 	ws.diffv.sides = sides
 	ws.diffv.loading = false
-	ws.diffv.bitmap = nil
+	ws.diffv.bitmapOld = nil
+	ws.diffv.bitmapNew = nil
+	// 内容变化即归位图片缩放：缩放属于旧内容，新内容从适配态重新看
+	ws.diffv.imgZoom.reset()
 	if ws.diffv.jumpLine > 0 {
 		// 定位等布局量好行高后的下一帧：请求重绘，别让跳转停在悬空状态
 		ws.app.invalidate()
 	}
 	// Markdown 预览的本地图片按文件所在目录解析
 	ws.mdOpts.LoadImage = markdown.FileImages(dirOf(changeAbs(v)))
+	// 焦点随打开请求进内容区，落地时一次性消费（Focus 的 pending 语义
+	// 覆盖控件还没 build 的时序）；watch 重读早退时不动它
+	takeFocus := ws.diffv.focusPending
+	ws.diffv.focusPending = false
 	if sides.binary {
-		// 图片在状态应用时解码一次（帧内不做 IO/解码）
-		if len(sides.binData) > 0 {
-			if bmp, err := ui.DecodeBitmap(sides.binData); err == nil {
-				ws.diffv.bitmap = bmp
+		// 图片在状态应用时解码一次（帧内不做 IO/解码）；单侧解码失败不
+		// 影响另一侧展示
+		if len(sides.binOld) > 0 {
+			if bmp, err := ui.DecodeBitmap(sides.binOld); err == nil {
+				ws.diffv.bitmapOld = bmp
 			}
 		}
+		if len(sides.binNew) > 0 {
+			if bmp, err := ui.DecodeBitmap(sides.binNew); err == nil {
+				ws.diffv.bitmapNew = bmp
+			}
+		}
+		// 只有真的渲染出图片才有可聚焦的内容：两侧都解码失败时请求作废，
+		// 免得遗留的 pending 在之后别的会话上突然生效
+		if takeFocus && (ws.diffv.bitmapOld != nil || ws.diffv.bitmapNew != nil) {
+			ws.diffv.zoomHandle.Focus()
+		}
 		return
+	}
+	// 文本 diff：官方 API 把键盘给活动侧编辑器（下次构建生效），方向键
+	// 滚动、Cmd+F 查找打开即用
+	if takeFocus {
+		ws.diffv.ed.Focus()
 	}
 	// 官方 diff 视图：统一/分栏、折叠上下文、内置查找；staged 只读无还原。
 	// ExpandUnchanged 取打开时的全局偏好（diffPane.expand）
@@ -597,9 +658,12 @@ func (ws *workspace) diffView(c *ui.Context) {
 				ui.Divider(c)
 			}
 			// 浏览工具组：布局形态（统一/分栏，全局偏好）→ 内容范围
-			//（展开未修改，全局偏好）。查找没有按钮：编辑器 keymap 自带
-			// Cmd/Ctrl+F（keymap.go），焦点在 diff 内容区即生效
-			ws.diffLayoutSwitch(c)
+			//（展开未修改，全局偏好）。图片 diff 不参与布局与展开，两侧
+			// 控件都不渲染；查找没有按钮：编辑器 keymap 自带 Cmd/Ctrl+F
+			//（keymap.go），焦点在 diff 内容区即生效
+			if ws.diffv.sides == nil || !ws.diffv.sides.binary {
+				ws.diffLayoutSwitch(c)
+			}
 			// 展开未修改的图标开关（仅文本 diff 有意义）：收起态上下尖角
 			// 外扩=点击全展开，展开态尖角相向=点击收起；打开时的初始态
 			// 取全局偏好，切换即写回并落盘
@@ -614,17 +678,8 @@ func (ws *workspace) diffView(c *ui.Context) {
 		case ws.diffv.loading:
 			emptyState(c, "加载中…", "")
 		case ws.diffv.sides != nil && ws.diffv.sides.binary:
-			if ws.diffv.bitmap != nil {
-				// 二进制图片：展示当前版本（列占头部之下剩余高度用 Grow，坑 14）
-				ui.Column(c).FillWidth().Grow(1).Background(tk.Surface).Children(func() {
-					ui.Image(c, ws.diffv.bitmap).Fit(ui.Contain).Fill()
-				})
-			} else {
-				ui.Column(c).Fill().Center().Gap(4).Children(func() {
-					ui.Text(c, "二进制文件").FontSize(tk.FontLG).FontWeight(600)
-					ui.Text(c, "无法以文本方式比较，可在侧栏列表右键暂存或取消暂存").TextColor(tk.Muted).FontSize(tk.FontSM)
-				})
-			}
+			// 二进制：图片旧/新两侧并排对比（新增/删除单侧占满），非图片维持空态
+			ws.binaryDiffView(c, tk)
 		case ws.mdPreview && ws.diffv.sides != nil:
 			// Markdown 预览：渲染工作区（新侧）内容
 			markdownPreview(c, ws.diffv.sides.newValue, &ws.mdOpts)
@@ -643,6 +698,81 @@ func (ws *workspace) diffView(c *ui.Context) {
 			}
 		}
 	})
+}
+
+// binaryDiffView 是二进制 diff 的内容区：图片扩展名时旧/新两侧并排对比
+// （新增/删除单侧时占满全宽），非图片二进制或两侧字节都读不到时维持文字
+// 空态。每列是标签行（版本 + 尺寸·大小）+ Surface 图片区；字节在但解码
+// 失败的一侧渲染占位文案，不挡住另一侧。
+func (ws *workspace) binaryDiffView(c *ui.Context, tk tokens) {
+	sides := ws.diffv.sides
+	oldOk := ws.diffv.bitmapOld != nil || len(sides.binOld) > 0
+	newOk := ws.diffv.bitmapNew != nil || len(sides.binNew) > 0
+	if !oldOk && !newOk {
+		ui.Column(c).Fill().Center().Gap(4).Children(func() {
+			ui.Text(c, "二进制文件").FontSize(tk.FontLG).FontWeight(600)
+			ui.Text(c, "无法以文本方式比较，可在侧栏列表右键暂存或取消暂存").TextColor(tk.Muted).FontSize(tk.FontSM)
+		})
+		return
+	}
+	// 列占头部之下剩余高度用 Grow 不用 Fill（坑 14）；Row 交叉轴显式
+	// Stretch：默认对齐会把 pane 列垂直居中，图片区高度塌成标签行高
+	//（headless 探针实抓）
+	ui.Row(c).FillWidth().Grow(1).AlignItems(ui.Stretch).Children(func() {
+		side := func(label string, bmp *ui.Bitmap, data []byte, handle *ui.Handle) {
+			ui.Column(c).FillWidth().Grow(1).Children(func() {
+				ui.Row(c).FillWidth().Height(tk.Space(5)).PaddingX(tk.Space(2)).Gap(tk.Space(2)).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, label).FontSize(tk.FontXS).TextColor(tk.Muted)
+					if bmp != nil {
+						w, h := bmp.Size()
+						ui.Text(c, fmt.Sprintf("%d×%d · %s", w, h, formatBytes(len(data)))).FontSize(tk.FontXS).TextColor(tk.Muted)
+					}
+				})
+				ui.Column(c).FillWidth().Grow(1).Background(tk.Surface).Children(func() {
+					if bmp != nil {
+						// 两列传同一状态指针：滚轮/拖拽作用任一列都联动。
+						// handle 只绑实际渲染出图片的一列（一个 Handle 绑
+						// 两个控件会 panic），由调用方择一传入
+						zoomImageView(c, bmp, &ws.diffv.imgZoom, handle, label+"图片")
+						return
+					}
+					ui.Row(c).Fill().Center().Children(func() {
+						ui.Text(c, "无法解码该图片").TextColor(tk.Muted).FontSize(tk.FontSM)
+					})
+				})
+			})
+		}
+		// 焦点 Handle 绑到真正渲染出图片的列：优先新版；删除图片只剩旧版
+		// 时绑旧版，否则打开请求的聚焦永远悬空
+		var oldHandle, newHandle *ui.Handle
+		switch {
+		case ws.diffv.bitmapNew != nil:
+			newHandle = &ws.diffv.zoomHandle
+		case ws.diffv.bitmapOld != nil:
+			oldHandle = &ws.diffv.zoomHandle
+		}
+		if oldOk {
+			side("旧版", ws.diffv.bitmapOld, sides.binOld, oldHandle)
+		}
+		if oldOk && newOk {
+			ui.Divider(c)
+		}
+		if newOk {
+			side("新版", ws.diffv.bitmapNew, sides.binNew, newHandle)
+		}
+	})
+}
+
+// formatBytes 字节数的人类可读格式（B/KB/MB），供图片对比的标签行。
+func formatBytes(n int) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }
 
 // jumpDiffLine 把 diff 滚到新侧第 line 行（1 起），让它在视口中间：内容

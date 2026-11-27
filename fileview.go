@@ -22,6 +22,11 @@ type fileView struct {
 	// 行号；跳到即清零，之后的 watch 重载不再重复跳
 	line   int
 	bitmap *ui.Bitmap
+	// imgZoom 是图片预览的缩放/平移状态；内容变化时在 applyFile 归位
+	imgZoom imageZoom
+	// focusPending 标记这次打开还没落过焦点（watch 同内容重读不重复抢）；
+	// 聚焦用的 Handle 归 dirPane 持久持有，见 fileZoomHandle/fileEdHandle
+	focusPending bool
 	// ed 是文本文件的官方编辑器状态（只读、按扩展名高亮），跨帧保持
 	ed *editor.State
 }
@@ -52,10 +57,11 @@ func (ws *workspace) fileMainView(c *ui.Context) {
 		case v.loading:
 			emptyState(c, "加载中…", "")
 		case v.kind == "image" && v.bitmap != nil:
-			// 非 Clip/滚动的列不许收缩（min-content=图片自然高），高图会把
-			// 列底撑出 pane；Grow 才是「头部之下的剩余高度」契约（坑 14）
-			ui.Column(c).FillWidth().Grow(1).Center().Background(tk.Surface).Children(func() {
-				ui.Image(c, v.bitmap).Fit(ui.Contain).Fill()
+			// 可缩放图片（滚轮/捏合缩放、拖拽平移、双击重置）。非 Clip/滚动
+			// 的列不许收缩（min-content=图片自然高），高图会把列底撑出
+			// pane；Grow 才是「头部之下的剩余高度」契约（坑 14）
+			ui.Column(c).FillWidth().Grow(1).Background(tk.Surface).Children(func() {
+				zoomImageView(c, v.bitmap, &v.imgZoom, &ws.dirs.fileZoomHandle, "图片预览")
 			})
 		case v.kind == "unsupported":
 			ui.Column(c).Fill().Center().Gap(4).Children(func() {
@@ -65,7 +71,9 @@ func (ws *workspace) fileMainView(c *ui.Context) {
 		case isMd && ws.mdPreview:
 			markdownPreview(c, v.content, &ws.mdOpts)
 		default:
-			editor.View(c, v.ed).Fill()
+			// 官方编辑器自身可聚焦（build.go 的 Box.Focusable），但 State
+			// 没有 Focus()；用 Handle 绑住它，打开请求即可把键盘送进来
+			editor.View(c, v.ed).Fill().Bind(&ws.dirs.fileEdHandle)
 		}
 	})
 }
@@ -127,7 +135,8 @@ func (ws *workspace) openFileAt(abs string, line int) {
 	// 预览模式不记忆：每次打开文件都是源码，用户手动切预览（否则上一个
 	// 文件的预览态会带到下一个文件）
 	ws.mdPreview = false
-	ws.dirs.file = &fileView{abs: abs, loading: true, line: line}
+	// 焦点随打开请求进内容区：落地后由 applyFile 经 consumeFileFocus 消费
+	ws.dirs.file = &fileView{abs: abs, loading: true, line: line, focusPending: true}
 	loadAsync(ws, func() fileResult {
 		content, err := os.ReadFile(abs)
 		return fileResult{content: content, err: err}
@@ -174,24 +183,30 @@ func (ws *workspace) applyFile(abs string, content []byte, err error) {
 	}
 	ws.dirs.file.loading = false
 	if err != nil {
+		ws.consumeFileFocus() // 请求作废：没有可聚焦的内容
 		ws.setErr("读取文件失败", err.Error())
 		return
 	}
 	// 原始字节全存（文本供 Markdown 预览，二进制供重读比对跳过重解码）
 	ws.dirs.file.content = string(content)
+	// 内容变化即归位图片缩放：缩放属于旧内容，新内容从适配态重新看
+	ws.dirs.file.imgZoom.reset()
 	if binary {
-		// 二进制：图片扩展名走预览，其余明确提示不支持
+		// 二进制：图片扩展名走预览，其余明确提示不支持。先归到不支持，
+		// 解码成功才升级为 image——否则上一份内容解出的 kind 会被沿用
+		ws.dirs.file.kind = "unsupported"
+		ws.dirs.file.bitmap = nil
 		if isImagePath(abs) {
 			if bmp, derr := ui.DecodeBitmap(content); derr == nil {
 				ws.dirs.file.kind = "image"
 				ws.dirs.file.bitmap = bmp
-				return
 			}
 		}
-		ws.dirs.file.kind = "unsupported"
+		ws.consumeFileFocus()
 		return
 	}
 	ws.dirs.file.kind = "text"
+	ws.dirs.file.bitmap = nil
 	// 官方编辑器只读查看：按文件名选语言做语法高亮，未知扩展名为纯文本
 	st := &editor.State{
 		Buffer:      editor.NewBuffer(string(content)),
@@ -203,7 +218,28 @@ func (ws *workspace) applyFile(abs string, content []byte, err error) {
 	if isMarkdownPath(abs) {
 		ws.mdOpts.LoadImage = markdown.FileImages(dirOf(abs))
 	}
+	// 文本同样把焦点送进内容区：edHandle 绑的是官方编辑器的可聚焦元素
+	ws.consumeFileFocus()
 	ws.jumpToFileLine()
+}
+
+// consumeFileFocus 消费打开请求的聚焦标志：图片聚焦缩放控件，文本聚焦
+// 编辑器元素（Handle 的绑定可在本次或下一帧建立，Focus 的 pending 语义
+// 覆盖时序）。unsupported/读取失败也消费——没有可聚焦内容，请求就此作废，
+// 免得很久之后 watch 重读恰好成功时突然抢焦点。watch 同内容重读不经过
+// 这里，不抢用户的焦点。
+func (ws *workspace) consumeFileFocus() {
+	v := ws.dirs.file
+	if v == nil || !v.focusPending {
+		return
+	}
+	v.focusPending = false
+	switch v.kind {
+	case "image":
+		ws.dirs.fileZoomHandle.Focus()
+	case "text":
+		ws.dirs.fileEdHandle.Focus()
+	}
 }
 
 // jumpToFileLine 把文件视图跳到打开请求指定的行（1 起），跳到即消费：

@@ -338,3 +338,198 @@ func layoutToggle(c *ui.Context, layout *bool, enabled bool) {
 		*layout = !*layout
 	}
 }
+
+// imageZoom 是 zoomImageView 的缩放/平移状态：scale=1 即「适配元素框」（与
+// ui.Image Fit(Contain) 同基准），x/y 是内容相对居中位置的平移（DIP）。
+// 状态归调用方持有：多个视图传同一指针即联动（diff 并排两列）；交互中的
+// 拖拽跟踪也在这里——构建闭包每帧重建，局部变量活不过相邻两次事件。
+type imageZoom struct {
+	scale, x, y float32
+	// w/h 是视口尺寸，由 Draw 按实际布局矩形更新：绘制发生在布局之后，
+	// 同一帧即为权威值。曾用 build 期 Bounds 缓存（滞后一个 pass），
+	// 图片刚显示的第一次滚轮/按键读到 0 被静默吞掉（实抓）
+	w, h float32
+	// 拖拽进行中的跟踪：上次指针位置与本次按下的累计位移（双击判定位移）
+	dragOn, dragMoved bool
+	dragLastX         float32
+	dragLastY         float32
+	dragDist          float32
+}
+
+// reset 回到适配态。
+func (z *imageZoom) reset() {
+	z.scale, z.x, z.y = 1, 0, 0
+}
+
+const (
+	imageZoomMax       float32 = 8    // 缩放上限（倍）：足够像素级查看
+	imageZoomWheelStep float32 = 1.25 // 鼠标滚轮一格/键盘 +− 的缩放步进
+	imageZoomPanStep   float32 = 40   // 方向键一步的平移量（DIP）
+)
+
+// zoomImageView 在调用方给定的固定区域内渲染一张可交互图片：鼠标滚轮一格与
+// 捏合（InputZoom，触控板双指/Windows Ctrl+滚轮）缩放、按住拖拽与触控板
+// 双指滚动平移、双击重置回适配；点击或 Tab 聚焦后方向键平移、+/− 缩放、
+// 0 重置（滚轮与捏合走指针命中，本就不需要焦点）。handle 非 nil 时绑定
+// 控件身份，调用方 Focus() 可把键盘焦点请求到图片上。事件与钳制逻辑按
+// 官方 ui/mobile.Zoomable 的桌面版改法：滚轮格是缩放（适配态无法平移），
+// Precise 滚动 scale=1 时放行给外层滚动容器。
+func zoomImageView(c *ui.Context, bm *ui.Bitmap, zoom *imageZoom, handle *ui.Handle, label string) {
+	if zoom.scale <= 0 {
+		zoom.scale = 1
+	}
+	w0, h0 := bm.Size()
+	bw, bh := float32(w0), float32(h0)
+	// Focusable：点击即收焦点（框架 pointerDown 把焦点给命中链上第一个
+	// 可聚焦元素），键盘控制无需再点一次
+	box := ui.Box(c).Fill().Clip().Role(ui.RoleImage).Focusable().Label(label)
+	if handle != nil {
+		box = box.Bind(handle)
+	}
+	box.HandleInput(func(ev ui.InputEvent) bool {
+		// 视口尺寸由上一帧绘制写入（Draw 在布局之后，见 imageZoom.w/h）；
+		// 尚未绘制过时事件尚无从处理
+		if zoom.w <= 0 || zoom.h <= 0 {
+			return false
+		}
+		clamp := func() {
+			zoom.scale = max(1, min(zoom.scale, imageZoomMax))
+			// 平移极限=图片超出视口的一半：不足视口宽/高的轴钳回居中
+			fw, fh := fitSize(bw, bh, zoom.w, zoom.h)
+			mx := max(0, (fw*zoom.scale-zoom.w)/2)
+			my := max(0, (fh*zoom.scale-zoom.h)/2)
+			zoom.x = max(-mx, min(zoom.x, mx))
+			zoom.y = max(-my, min(zoom.y, my))
+		}
+		// zoomAt 以给定点为锚缩放：锚点下的内容点保持原位（官方 Zoomable 同式）
+		zoomAt := func(factor, px, py float32) {
+			k := max(1, min(zoom.scale*factor, imageZoomMax)) / zoom.scale
+			zoom.x = px - (px-zoom.x)*k
+			zoom.y = py - (py-zoom.y)*k
+			zoom.scale *= k
+			clamp()
+		}
+		switch ev.Kind {
+		case ui.InputKeyDown:
+			// 键盘只在焦点恰在本元素时到达（框架 focusHandler 派发规则）。
+			// 平移是视口语义：方向键移动视口，与触控板滚动同向
+			switch ev.Key {
+			case ui.KeyLeft:
+				zoom.x += imageZoomPanStep
+				clamp()
+				return true
+			case ui.KeyRight:
+				zoom.x -= imageZoomPanStep
+				clamp()
+				return true
+			case ui.KeyUp:
+				zoom.y += imageZoomPanStep
+				clamp()
+				return true
+			case ui.KeyDown:
+				zoom.y -= imageZoomPanStep
+				clamp()
+				return true
+			case ui.KeyEqual: // 美式布局的 + 即 Shift+Equal，忽略修饰键
+				zoomAt(imageZoomWheelStep, 0, 0) // 键盘缩放锚在视口中心
+				return true
+			case ui.KeyMinus:
+				zoomAt(1/imageZoomWheelStep, 0, 0)
+				return true
+			case ui.Key0:
+				zoom.reset()
+				return true
+			}
+			return false // 其余按键放行：Tab 可离开，应用快捷键不受影响
+		case ui.InputZoom:
+			zoomAt(ev.Scale, ev.X-zoom.w/2, ev.Y-zoom.h/2)
+			return true
+		case ui.InputScroll:
+			if ev.Precise {
+				if zoom.scale <= 1 {
+					return false // 适配态没有可平移的内容
+				}
+				zoom.x -= ev.DX
+				zoom.y -= ev.DY
+				clamp()
+				return true
+			}
+			// 鼠标滚轮一格=缩放，向上滚（DY<0）放大
+			step := 1 / imageZoomWheelStep
+			if ev.DY < 0 {
+				step = imageZoomWheelStep
+			}
+			zoomAt(step, ev.X-zoom.w/2, ev.Y-zoom.h/2)
+			return true
+		case ui.InputPointerDown:
+			// 收下按下以捕获后续移动/抬起；双击改在 Up 的 Clicks 里判
+			//（handler 收下 Down 后元素的 DoubleClicked 不再触发）
+			zoom.dragOn = true
+			zoom.dragMoved = false
+			zoom.dragDist = 0
+			zoom.dragLastX, zoom.dragLastY = ev.X, ev.Y
+			return true
+		case ui.InputPointerMove:
+			if !zoom.dragOn {
+				return false
+			}
+			dx, dy := ev.X-zoom.dragLastX, ev.Y-zoom.dragLastY
+			zoom.dragDist += abs32(dx) + abs32(dy)
+			if zoom.dragDist > 4 {
+				zoom.dragMoved = true
+			}
+			zoom.dragLastX, zoom.dragLastY = ev.X, ev.Y
+			zoom.x += dx
+			zoom.y += dy
+			clamp()
+			return true
+		case ui.InputPointerUp:
+			if !zoom.dragOn {
+				return false
+			}
+			zoom.dragOn = false
+			// 双击且几乎没拖动：重置回适配
+			if ev.Clicks == 2 && !ev.Canceled && !zoom.dragMoved {
+				zoom.reset()
+			}
+			return true
+		}
+		return false
+	})
+	box.Draw(func(p *ui.Painter, r ui.Rect) {
+		if r.W <= 0 || r.H <= 0 {
+			return
+		}
+		// 布局后的真实矩形：事件期用它算锚点与钳制（同一帧即权威值）
+		zoom.w, zoom.h = r.W, r.H
+		// 基准 contain 矩形以框中心放大 scale 倍再平移；超出元素框的
+		// 部分由 Clip 裁掉（paintFn 不受元素框裁剪，须自己裁）
+		fw, fh := fitSize(bw, bh, r.W, r.H)
+		dst := ui.Rect{
+			X: r.X + r.W/2 - fw*zoom.scale/2 + zoom.x,
+			Y: r.Y + r.H/2 - fh*zoom.scale/2 + zoom.y,
+			W: fw * zoom.scale,
+			H: fh * zoom.scale,
+		}
+		p.Clip(r, 0, func() {
+			p.ImageRegion(bm, ui.Rect{}, dst, ui.ImageOptions{})
+		})
+	})
+}
+
+// abs32 float32 绝对值（math.Abs 的 float32 直写，避免来回转换）。
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// fitSize contain 适配：bw×bh 保持比例装进 w×h 的最大显示尺寸。
+func fitSize(bw, bh, w, h float32) (float32, float32) {
+	if bw <= 0 || bh <= 0 || w <= 0 || h <= 0 {
+		return 0, 0
+	}
+	k := min(w/bw, h/bh)
+	return bw * k, bh * k
+}

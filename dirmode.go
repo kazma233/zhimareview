@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/egoist/mygo/ui"
 	"zhimareview/internal/git"
 )
 
@@ -85,6 +86,10 @@ type dirPane struct {
 	rows       []sideRow
 	list       selList
 	file       *fileView
+	// 文件查看的聚焦 Handle 必须跨打开存活：Handle 绑定在窗口关闭前不会
+	// 从框架的 refs 移除，每次打开新建会随会话累积陈旧绑定
+	fileZoomHandle ui.Handle
+	fileEdHandle   ui.Handle
 }
 
 // rebuildRows 把目录缓存按展开态拍平成渲染行，并聚合各目录的改动状态。
